@@ -1,0 +1,26 @@
+# use glob syntax.
+syntax: glob
+
+data/*
+__pycache__
+
+# LaTex generated files
+*.aux
+*.bbl
+*.blg
+*.log
+*.out
+*.synctex.gz
+*.toc
+
+.idea
+*.lmdb
+
+# Ignore Extensions
+*.lnk
+Thumbs.db
+.DS_Store
+*.db
+*.swp
+*.dot
+*.pyc
