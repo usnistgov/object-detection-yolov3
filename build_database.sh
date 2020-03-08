@@ -4,9 +4,25 @@
 # NIST-developed software is expressly provided "AS IS." NIST MAKES NO WARRANTY OF ANY KIND, EXPRESS, IMPLIED, IN FACT OR ARISING BY OPERATION OF LAW, INCLUDING, WITHOUT LIMITATION, THE IMPLIED WARRANTY OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT AND DATA ACCURACY. NIST NEITHER REPRESENTS NOR WARRANTS THAT THE OPERATION OF THE SOFTWARE WILL BE UNINTERRUPTED OR ERROR-FREE, OR THAT ANY DEFECTS WILL BE CORRECTED. NIST DOES NOT WARRANT OR MAKE ANY REPRESENTATIONS REGARDING THE USE OF THE SOFTWARE OR THE RESULTS THEREOF, INCLUDING BUT NOT LIMITED TO THE CORRECTNESS, ACCURACY, RELIABILITY, OR USEFULNESS OF THE SOFTWARE.
 # You are solely responsible for determining the appropriateness of using and distributing the software and you assume all risks associated with its use, including but not limited to the risks and costs of program errors, compliance with applicable laws, damage to or loss of data, programs or equipment, and the unavailability or interruption of operation. This software is not intended to be used in any situation where a failure could cause risk of injury or damage to property. The software developed by NIST employees is not subject to copyright protection within the United States.
 
-#source ~/anaconda3/etc/profile.d/conda.sh
-conda create -n tf2 python=3.6
-conda activate tf2
 
-conda install numpy tensorflow-gpu python-lmdb scikit-image pandas scikit-learn -y
+# ************************************
+# MODIFY THESE OPTIONS
 
+image_folder="./data-large/images/"
+csv_folder="./data-large/boxes/"
+
+output_folder="./data-large/"
+
+# what common name to use in saving the lmdb dataset
+dataset_name="example"
+
+# what fraction of your data to use for training. Test is 1.0 - train_fraction of the data
+train_fraction=0.8 # (0.0, 1.0)
+
+# what format are the images in your image/mask folder
+image_format="jpg"
+
+# END OF MODIFY THESE OPTIONS
+# ************************************
+
+python build_lmdb.py  --image_folder=${image_folder} --csv_folder=${csv_folder} --output_folder=${output_folder} --dataset_name=${dataset_name} --image_format=${image_format} --train_fraction=${train_fraction}

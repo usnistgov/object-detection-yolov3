@@ -1,8 +1,11 @@
 # use glob syntax.
 syntax: glob
 
-data/*
+data/*.lmdb
+model
 __pycache__
+
+*.png
 
 # LaTex generated files
 *.aux
