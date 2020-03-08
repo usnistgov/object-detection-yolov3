@@ -15,23 +15,20 @@
 
 
 source ~/anaconda3/etc/profile.d/conda.sh
-conda activate argus
+conda activate tf2
 
 # job configuration
 test_every_n_steps=10000
 batch_size=8 # 8x across the gpus
-learning_rate=1e-5
+learning_rate=1e-4
 
-train_lmdb_file="train-yolov3-20200219.lmdb"
-test_lmdb_file="test-yolov3-20200219.lmdb"
+train_lmdb_file="train-yolov3.lmdb"
+test_lmdb_file="test-yolov3.lmdb"
 
 input_data_directory="/wrk/mmajursk/"
 output_directory="/wrk/mmajursk/yolov3"
 
 experiment_name="y3-$(date +%Y%m%dT%H%M%S)"
-
-# checkpoint_filepath="/wrk/mmajursk/yolov3rpn/y3-rpnpre-20190506T135157/checkpoint/model.ckpt"
-# restore_var_common_name="darknet53"
 
 # MODIFY THESE OPTIONS
 # **************************
@@ -72,7 +69,7 @@ ls ${scratch_dir}/
 
 # launch training script with required options
 echo "Launching Training Script"
-python train.py --test_every_n_steps=${test_every_n_steps} --batch_size=${batch_size} --train_database="$scratch_dir/$train_lmdb_file" --test_database="$scratch_dir/$test_lmdb_file" --output_dir="$results_dir" --learning_rate=${learning_rate} | tee "$results_dir/log.txt"
+python train.py --test_every_n_steps=${test_every_n_steps} --batch_size=${batch_size} --train_database="$scratch_dir/$train_lmdb_file" --test_database="$scratch_dir/$test_lmdb_file" --output_dir="$results_dir" --learning_rate=${learning_rate}
 
 
 echo "cleaning up scratch space"

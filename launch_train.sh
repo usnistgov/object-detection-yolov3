@@ -13,14 +13,14 @@
 GPU="0"
 
 # how large is an epoch, or sub/super epoch test dataset evaluation
-test_every_n_step=100
+test_every_n_step=1000
 batch_size=8
 
 # where is your training lmdb database
-train_database="/home/mmajursk/USNISTGOV/object-detection-yolov3/data-large/train-example.lmdb"
-test_database="/home/mmajursk/USNISTGOV/object-detection-yolov3/data-large/test-example.lmdb"
+train_database="./data/train-example.lmdb"
+test_database="./data/test-example.lmdb"
 
-output_folder="/home/mmajursk/USNISTGOV/object-detection-yolov3/model-large/"
+output_folder="./model/"
 
 # what learning rate should the network use
 learning_rate=1e-4 # Karpathy Constant

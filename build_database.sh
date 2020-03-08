@@ -8,10 +8,10 @@
 # ************************************
 # MODIFY THESE OPTIONS
 
-image_folder="./data-large/images/"
-csv_folder="./data-large/boxes/"
+image_folder="./data/images/"
+csv_folder="./data/boxes/"
 
-output_folder="./data-large/"
+output_folder="./data/"
 
 # what common name to use in saving the lmdb dataset
 dataset_name="example"
