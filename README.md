@@ -31,7 +31,33 @@ The input folder of images and masks needs to be split into train and test. Trai
 
 ```
 python build_lmdb.py -h
-TODO
+usage: build_lmdb [-h] --image_folder IMAGE_FOLDER --csv_folder CSV_FOLDER
+                  --output_folder OUTPUT_FOLDER --dataset_name DATASET_NAME
+                  [--train_fraction TRAIN_FRACTION]
+                  [--image_format IMAGE_FORMAT]
+
+Script which converts two folders of images and masks into a pair of lmdb
+databases for training.
+
+optional arguments:
+  -h, --help            show this help message and exit
+  --image_folder IMAGE_FOLDER
+                        filepath to the folder containing the images
+  --csv_folder CSV_FOLDER
+                        filepath to the folder containing the bounding box csv
+                        files
+  --output_folder OUTPUT_FOLDER
+                        filepath to the folder where the outputs will be
+                        placed
+  --dataset_name DATASET_NAME
+                        name of the dataset to be used in creating the lmdb
+                        files
+  --train_fraction TRAIN_FRACTION
+                        what fraction of the dataset to use for training (0.0,
+                        1.0)
+  --image_format IMAGE_FORMAT
+                        format (extension) of the input images. E.g {tif, jpg,
+                        png)
 ```
 
 
@@ -43,40 +69,42 @@ With the lmdb build there are two methods for training a model.
 2. Local: Single Node Multi GPU
 	- If you want to train the model on local hardware, avoid using `launch_train_sbatch.sh`, use python and directly launch `train.py`.
 
-Whether you launch the training locally or on Enki, the training script will query the system and determine how many GPUs are available. It will then build the network for training using data-parallelism. So when you define your batch size, it will actually be multiplied by the number of GPUs you are using to train the network. So a batch size of 8 training on 4 gpus, results in an actual batch size of 32. Each GPU computes its own forward pass on its own data, computes the gradient, and then all N gradients are averaged. The gradient averaging can either happen on the CPU, or on any of the GPUs. 
-
-On Enki, the GPUs have a fully connected topology:
-
-```
-2019-02-27 13:05:03.068185: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1511] Adding visible gpu devices: 0, 1, 2, 3
-2019-02-27 13:05:04.525934: I tensorflow/core/common_runtime/gpu/gpu_device.cc:982] Device interconnect StreamExecutor with strength 1 edge matrix:
-2019-02-27 13:05:04.527345: I tensorflow/core/common_runtime/gpu/gpu_device.cc:988]      0 1 2 3 
-2019-02-27 13:05:04.528317: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1001] 0:   N Y Y Y 
-2019-02-27 13:05:04.529605: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1001] 1:   Y N Y Y 
-2019-02-27 13:05:04.530902: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1001] 2:   Y Y N Y 
-2019-02-27 13:05:04.532257: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1001] 3:   Y Y Y N 
-```
-
-However, on other systems this might not be the case:
-
-```
-2019-02-27 13:45:03.442171: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1471] Adding visible gpu devices: 0, 1, 2, 3
-2019-02-27 13:45:05.405248: I tensorflow/core/common_runtime/gpu/gpu_device.cc:952] Device interconnect StreamExecutor with strength 1 edge matrix:
-2019-02-27 13:45:05.405293: I tensorflow/core/common_runtime/gpu/gpu_device.cc:958]      0 1 2 3 
-2019-02-27 13:45:05.405302: I tensorflow/core/common_runtime/gpu/gpu_device.cc:971] 0:   N Y N N 
-2019-02-27 13:45:05.405307: I tensorflow/core/common_runtime/gpu/gpu_device.cc:971] 1:   Y N N N 
-2019-02-27 13:45:05.405311: I tensorflow/core/common_runtime/gpu/gpu_device.cc:971] 2:   N N N Y 
-2019-02-27 13:45:05.405315: I tensorflow/core/common_runtime/gpu/gpu_device.cc:971] 3:   N N Y N 
-```
+Whether you launch the training locally or on Enki, the training script will query the system and determine how many GPUs are available. It will then build the network for training using data-parallelism. So when you define your batch size, it will actually be multiplied by the number of GPUs you are using to train the network. So a batch size of 8 training on 4 gpus, results in an actual batch size of 32. Each GPU computes its own forward pass on its own data, computes the gradient, and then all N gradients are averaged. 
 
 The full help for the training script is:
 
 
 ```
-python train_resnet50.py -h
-TODO 
+python train.py -h
+usage: train_yolo [-h] [--batch_size BATCH_SIZE]
+                  [--learning_rate LEARNING_RATE]
+                  [--test_every_n_steps TEST_EVERY_N_STEPS] --train_database
+                  TRAIN_DATABASE_FILEPATH --test_database
+                  TEST_DATABASE_FILEPATH --output_dir OUTPUT_FOLDER
+                  [--early_stopping TERMINATE_AFTER_NUM_EPOCHS_WITHOUT_TEST_LOSS_IMPROVEMENT]
+                  [--use_augmentation USE_AUGMENTATION]
 
+Script which trains a yolo_v3 model
 
+optional arguments:
+  -h, --help            show this help message and exit
+  --batch_size BATCH_SIZE
+                        training batch size
+  --learning_rate LEARNING_RATE
+  --test_every_n_steps TEST_EVERY_N_STEPS
+                        number of gradient update steps to take between test
+                        runs
+  --train_database TRAIN_DATABASE_FILEPATH
+                        lmdb database to use for (Required)
+  --test_database TEST_DATABASE_FILEPATH
+                        lmdb database to use for testing (Required)
+  --output_dir OUTPUT_FOLDER
+                        Folder where outputs will be saved (Required)
+  --early_stopping TERMINATE_AFTER_NUM_EPOCHS_WITHOUT_TEST_LOSS_IMPROVEMENT
+                        Perform early stopping when the test loss does not
+                        improve for N epochs.
+  --use_augmentation USE_AUGMENTATION
+                        whether to use data augmentation [0 = false, 1 = true]
 ```
 
 A few of the arguments require explanation.
