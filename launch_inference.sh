@@ -19,9 +19,9 @@ min_box_size=32
 image_folder="./data/images/"
 image_format='jpg'
 
-output_folder='./model-large/inference/'
+output_folder='./model/inference/'
 
-saved_model_filepath='./model-large/saved_model/'
+saved_model_filepath='./model/saved_model/'
 
 # END MODIFY THESE OPTIONS
 # ************************************
