@@ -19,7 +19,7 @@ import os
 import skimage.io
 import skimage.transform
 from isg_ai_pb2 import ImageYoloBoxesPair
-import yolov3
+import model
 
 
 
@@ -220,14 +220,14 @@ class ImageReader:
         num_anchors = len(anchors)
 
         grid_sizes = []
-        a = int(self.image_size[0] / yolov3.YoloV3.NETWORK_DOWNSAMPLE_FACTOR)
-        b = int(self.image_size[1] / yolov3.YoloV3.NETWORK_DOWNSAMPLE_FACTOR)
+        a = int(self.image_size[0] / model.YoloV3.NETWORK_DOWNSAMPLE_FACTOR)
+        b = int(self.image_size[1] / model.YoloV3.NETWORK_DOWNSAMPLE_FACTOR)
         grid_sizes.append((a, b))
-        a = int(self.image_size[0] / (yolov3.YoloV3.NETWORK_DOWNSAMPLE_FACTOR / 2))
-        b = int(self.image_size[1] / (yolov3.YoloV3.NETWORK_DOWNSAMPLE_FACTOR / 2))
+        a = int(self.image_size[0] / (model.YoloV3.NETWORK_DOWNSAMPLE_FACTOR / 2))
+        b = int(self.image_size[1] / (model.YoloV3.NETWORK_DOWNSAMPLE_FACTOR / 2))
         grid_sizes.append((a, b))
-        a = int(self.image_size[0] / (yolov3.YoloV3.NETWORK_DOWNSAMPLE_FACTOR / 4))
-        b = int(self.image_size[1] / (yolov3.YoloV3.NETWORK_DOWNSAMPLE_FACTOR / 4))
+        a = int(self.image_size[0] / (model.YoloV3.NETWORK_DOWNSAMPLE_FACTOR / 4))
+        b = int(self.image_size[1] / (model.YoloV3.NETWORK_DOWNSAMPLE_FACTOR / 4))
         grid_sizes.append((a, b))
 
         num_layers = len(grid_sizes)
@@ -411,14 +411,14 @@ class ImageReader:
         # Images come in as HWC, and are converted into CHW for network
         image_shape = tf.TensorShape((self.image_size[2], self.image_size[0], self.image_size[1]))
 
-        grid_size0 = int(self.image_size[0] / yolov3.YoloV3.NETWORK_DOWNSAMPLE_FACTOR)
-        grid_size1 = int(self.image_size[1] / yolov3.YoloV3.NETWORK_DOWNSAMPLE_FACTOR)
+        grid_size0 = int(self.image_size[0] / model.YoloV3.NETWORK_DOWNSAMPLE_FACTOR)
+        grid_size1 = int(self.image_size[1] / model.YoloV3.NETWORK_DOWNSAMPLE_FACTOR)
         label_shape_1 = tf.TensorShape((grid_size0, grid_size1, self.number_anchors, 5 + self.number_classes))
-        grid_size0 = int(self.image_size[0] / (yolov3.YoloV3.NETWORK_DOWNSAMPLE_FACTOR / 2))
-        grid_size1 = int(self.image_size[1] / (yolov3.YoloV3.NETWORK_DOWNSAMPLE_FACTOR / 2))
+        grid_size0 = int(self.image_size[0] / (model.YoloV3.NETWORK_DOWNSAMPLE_FACTOR / 2))
+        grid_size1 = int(self.image_size[1] / (model.YoloV3.NETWORK_DOWNSAMPLE_FACTOR / 2))
         label_shape_2 = tf.TensorShape((grid_size0, grid_size1, self.number_anchors, 5 + self.number_classes))
-        grid_size0 = int(self.image_size[0] / (yolov3.YoloV3.NETWORK_DOWNSAMPLE_FACTOR / 4))
-        grid_size1 = int(self.image_size[1] / (yolov3.YoloV3.NETWORK_DOWNSAMPLE_FACTOR / 4))
+        grid_size0 = int(self.image_size[0] / (model.YoloV3.NETWORK_DOWNSAMPLE_FACTOR / 4))
+        grid_size1 = int(self.image_size[1] / (model.YoloV3.NETWORK_DOWNSAMPLE_FACTOR / 4))
         label_shape_3 = tf.TensorShape((grid_size0, grid_size1, self.number_anchors, 5 + self.number_classes))
 
         return tf.data.Dataset.from_generator(self.generator, output_types=(tf.float32, tf.float32, tf.float32, tf.float32), output_shapes=(image_shape, label_shape_1, label_shape_2, label_shape_3))

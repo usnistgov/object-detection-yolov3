@@ -15,7 +15,7 @@ if int(tf.__version__.split('.')[0]) != 2:
     raise RuntimeError('Tensorflow 2.x.x required')
 from tensorflow.keras.mixed_precision import experimental as mixed_precision
 
-import yolov3
+import model
 import imagereader
 import time
 
@@ -61,7 +61,7 @@ def train_model(batch_size, test_every_n_steps, train_database_filepath, test_da
 
             print('Creating model')
             number_classes = train_reader.get_number_classes()
-            model = yolov3.YoloV3(global_batch_size, train_reader.get_image_size(), number_classes, anchors, learning_rate)
+            model = model.YoloV3(global_batch_size, train_reader.get_image_size(), number_classes, anchors, learning_rate)
 
             checkpoint = tf.train.Checkpoint(optimizer=model.get_optimizer(), model=model.get_keras_model())
 
@@ -207,7 +207,7 @@ def train_model(batch_size, test_every_n_steps, train_database_filepath, test_da
         print('  number_classes = {}'.format(number_classes))
         print('  anchors = {}'.format(anchors))
         print('  learning_rate = {}'.format(learning_rate))
-        model = yolov3.YoloV3(global_batch_size, train_reader.get_image_size(), number_classes, anchors, learning_rate)
+        model = model.YoloV3(global_batch_size, train_reader.get_image_size(), number_classes, anchors, learning_rate)
 
         checkpoint = tf.train.Checkpoint(optimizer=model.get_optimizer(), model=model.get_keras_model())
         checkpoint.restore(training_checkpoint_filepath).expect_partial()
