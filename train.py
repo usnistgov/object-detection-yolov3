@@ -175,8 +175,6 @@ def train_model(batch_size, test_every_n_steps, train_database_filepath, test_da
                     # checkpoint.save(os.path.join(output_folder, 'checkpoint', "ckpt")) # does not overwrite
                     training_checkpoint_filepath = checkpoint.write(os.path.join(output_folder, 'checkpoint', "ckpt"))
 
-                    break  # todo remove
-
                 # determine early stopping
                 CONVERGENCE_TOLERANCE = 1e-4
                 print('Best Current Epoch Selection:')
