@@ -1,4 +1,4 @@
-# Regression
+# Object Detection
 
 Object Detection Tensorflow model ready to run on Enki.
 - Yolo: [https://arxiv.org/abs/1506.02640](https://arxiv.org/abs/1506.02640)
