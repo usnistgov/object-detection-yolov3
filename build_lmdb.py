@@ -11,6 +11,7 @@ from isg_ai_pb2 import ImageYoloBoxesPair
 import shutil
 import lmdb
 import argparse
+import random
 
 import bbox_utils
 
@@ -109,6 +110,9 @@ def build_lmdb(image_folder, csv_folder, output_folder, dataset_name, train_frac
         os.mkdir(output_folder)
     # find the image files for which annotations exist
     csv_files = [f for f in os.listdir(csv_folder) if f.endswith('.csv')]
+    # in place shuffle
+    random.shuffle(csv_files)
+
     img_files = [fn.replace('.csv', '.{}'.format(image_format)) for fn in csv_files]
 
     csv_files = [os.path.join(csv_folder, fn) for fn in csv_files]
