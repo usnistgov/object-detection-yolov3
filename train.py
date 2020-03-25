@@ -1,3 +1,9 @@
+# NIST-developed software is provided by NIST as a public service. You may use, copy and distribute copies of the software in any medium, provided that you keep intact this entire notice. You may improve, modify and create derivative works of the software or any portion of the software, and you may copy and distribute such modifications or works. Modified works should carry a notice stating that you changed the software and should note the date and nature of any such change. Please explicitly acknowledge the National Institute of Standards and Technology as the source of the software.
+
+# NIST-developed software is expressly provided "AS IS." NIST MAKES NO WARRANTY OF ANY KIND, EXPRESS, IMPLIED, IN FACT OR ARISING BY OPERATION OF LAW, INCLUDING, WITHOUT LIMITATION, THE IMPLIED WARRANTY OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT AND DATA ACCURACY. NIST NEITHER REPRESENTS NOR WARRANTS THAT THE OPERATION OF THE SOFTWARE WILL BE UNINTERRUPTED OR ERROR-FREE, OR THAT ANY DEFECTS WILL BE CORRECTED. NIST DOES NOT WARRANT OR MAKE ANY REPRESENTATIONS REGARDING THE USE OF THE SOFTWARE OR THE RESULTS THEREOF, INCLUDING BUT NOT LIMITED TO THE CORRECTNESS, ACCURACY, RELIABILITY, OR USEFULNESS OF THE SOFTWARE.
+
+# You are solely responsible for determining the appropriateness of using and distributing the software and you assume all risks associated with its use, including but not limited to the risks and costs of program errors, compliance with applicable laws, damage to or loss of data, programs or equipment, and the unavailability or interruption of operation. This software is not intended to be used in any situation where a failure could cause risk of injury or damage to property. The software developed by NIST employees is not subject to copyright protection within the United States.
+
 import sys
 if sys.version_info[0] < 3:
     raise RuntimeError('Python3 required')
@@ -13,7 +19,6 @@ import numpy as np
 import tensorflow as tf
 if int(tf.__version__.split('.')[0]) != 2:
     raise RuntimeError('Tensorflow 2.x.x required')
-from tensorflow.keras.mixed_precision import experimental as mixed_precision
 
 import model
 import imagereader
@@ -61,9 +66,9 @@ def train_model(batch_size, test_every_n_steps, train_database_filepath, test_da
 
             print('Creating model')
             number_classes = train_reader.get_number_classes()
-            model = model.YoloV3(global_batch_size, train_reader.get_image_size(), number_classes, anchors, learning_rate)
+            yolo = model.YoloV3(global_batch_size, train_reader.get_image_size(), number_classes, anchors, learning_rate)
 
-            checkpoint = tf.train.Checkpoint(optimizer=model.get_optimizer(), model=model.get_keras_model())
+            checkpoint = tf.train.Checkpoint(optimizer=yolo.get_optimizer(), model=yolo.get_keras_model())
 
             # train_epoch_size = train_reader.get_image_count()/batch_size
             train_epoch_size = test_every_n_steps
@@ -101,10 +106,10 @@ def train_model(batch_size, test_every_n_steps, train_database_filepath, test_da
                 if epoch == 0:
                     cur_train_epoch_size = min(1000, train_epoch_size)
                     print('Performing Adam Optimizer learning rate warmup for {} steps'.format(cur_train_epoch_size))
-                    model.set_learning_rate(learning_rate / 10)
+                    yolo.set_learning_rate(learning_rate / 10)
                 else:
                     cur_train_epoch_size = train_epoch_size
-                    model.set_learning_rate(learning_rate)
+                    yolo.set_learning_rate(learning_rate)
 
                 # Iterate over the batches of the train dataset.
                 start_time = time.time()
@@ -114,7 +119,7 @@ def train_model(batch_size, test_every_n_steps, train_database_filepath, test_da
 
                     label_batch = (label_1_batch, label_2_batch, label_3_batch)
                     inputs = (batch_images, label_batch, train_loss_metric, train_loss_xy_metric, train_loss_wh_metric, train_loss_objectness_metric, train_loss_class_metric)
-                    loss_value = model.dist_train_step(mirrored_strategy, inputs)
+                    loss_value = yolo.dist_train_step(mirrored_strategy, inputs)
                     if np.isnan(loss_value):
                         raise RuntimeError('Training Loss went to NaN, try a lower learning rate')
 
@@ -140,7 +145,7 @@ def train_model(batch_size, test_every_n_steps, train_database_filepath, test_da
 
                     label_batch = (label_1_batch, label_2_batch, label_3_batch)
                     inputs = (batch_images, label_batch, test_loss_metric, test_loss_xy_metric, test_loss_wh_metric, test_loss_objectness_metric, test_loss_class_metric)
-                    loss_value = model.dist_test_step(mirrored_strategy, inputs)
+                    loss_value = yolo.dist_test_step(mirrored_strategy, inputs)
                     if np.isnan(loss_value):
                         raise RuntimeError('Test Loss went to NaN')
 
@@ -207,11 +212,11 @@ def train_model(batch_size, test_every_n_steps, train_database_filepath, test_da
         print('  number_classes = {}'.format(number_classes))
         print('  anchors = {}'.format(anchors))
         print('  learning_rate = {}'.format(learning_rate))
-        model = model.YoloV3(global_batch_size, train_reader.get_image_size(), number_classes, anchors, learning_rate)
+        yolo = model.YoloV3(global_batch_size, train_reader.get_image_size(), number_classes, anchors, learning_rate)
 
-        checkpoint = tf.train.Checkpoint(optimizer=model.get_optimizer(), model=model.get_keras_model())
+        checkpoint = tf.train.Checkpoint(optimizer=yolo.get_optimizer(), model=yolo.get_keras_model())
         checkpoint.restore(training_checkpoint_filepath).expect_partial()
-        tf.saved_model.save(model.get_keras_model(), os.path.join(output_folder, 'saved_model'))
+        tf.saved_model.save(yolo.get_keras_model(), os.path.join(output_folder, 'saved_model'))
 
 
 if __name__ == "__main__":
