@@ -144,9 +144,6 @@ class ImageReader:
         self.workers = None
         self.done = False
 
-    def get_source_image_size(self):
-        return self.src_image_size
-
     def get_image_size(self):
         return self.image_size
 
