@@ -42,6 +42,7 @@ def inference(image_folder, image_format, saved_model_filepath, output_folder, m
 
         print('Loading image: {}'.format(img_filepath))
         img = imagereader.imread(img_filepath)
+        height, width, channels = img.shape
         img = img.astype(np.float32)
 
         # normalize with whole image stats
@@ -56,6 +57,13 @@ def inference(image_folder, image_format, saved_model_filepath, output_folder, m
 
         boxes = yolo_model(batch_data, training=False)
         # boxes are [x1,y1,x2,y2,c]
+
+        # constrain boxes to image coordinates
+        boxes[:, 0] = np.clip(boxes[:, 0], 0, width)
+        boxes[:, 1] = np.clip(boxes[:, 1], 0, height)
+        boxes[:, 2] = np.clip(boxes[:, 2], 0, width)
+        boxes[:, 3] = np.clip(boxes[:, 3], 0, height)
+
 
         # strip out batch_size which is fixed at one
         boxes = np.array(boxes)

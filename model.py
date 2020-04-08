@@ -199,13 +199,13 @@ class YoloV3():
         height = boxes[:, :, 3:4]
 
         x0 = center_x - width / 2.0
-        x0 = tf.clip_by_value(x0, 0, self.img_size[1])
+        # x0 = tf.clip_by_value(x0, 0, self.img_size[1])
         y0 = center_y - height / 2.0
-        y0 = tf.clip_by_value(y0, 0, self.img_size[0])
+        # y0 = tf.clip_by_value(y0, 0, self.img_size[0])
         x1 = center_x + width / 2.0
-        x1 = tf.clip_by_value(x1, 0, self.img_size[1])
+        # x1 = tf.clip_by_value(x1, 0, self.img_size[1])
         y1 = center_y + height / 2.0
-        y1 = tf.clip_by_value(y1, 0, self.img_size[0])
+        # y1 = tf.clip_by_value(y1, 0, self.img_size[0])
 
         boxes = tf.concat([x0, y0, x1, y1, objectness, class_probs], axis=-1)
 
