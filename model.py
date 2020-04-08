@@ -121,6 +121,7 @@ class YoloV3():
 
     def reorg_layer(self, feature_map):
         grid_size = feature_map.shape.as_list()[2:]
+
         # the stride across the full resolution image, e.g how large each cell is
         # only use spatial size of self.img_size (ignore channel depth)
         stride = tf.cast(np.asarray(self.img_size[0:2], dtype=np.float32) // np.asarray(grid_size, dtype=np.float32), tf.float32)
@@ -159,8 +160,10 @@ class YoloV3():
         # box_xy = cell_size * (sigmoid(xy) + xy_offset)
         box_xy = (tf.nn.sigmoid(box_xy) + xy_offset) * stride
 
+        # last 2 dim of box_wh matches self.anchors, so broadcast happens as expected
         box_wh = tf.exp(box_wh) * self.anchors
         boxes = tf.concat([box_xy, box_wh], axis=-1)
+
         return xy_offset, boxes, objectness_logits, class_logits
 
     def convert_feature_map_to_inference_detections(self, pred_feature_map):
@@ -196,12 +199,15 @@ class YoloV3():
         height = boxes[:, :, 3:4]
 
         x0 = center_x - width / 2.0
+        x0 = tf.clip_by_value(x0, 0, self.img_size[1])
         y0 = center_y - height / 2.0
+        y0 = tf.clip_by_value(y0, 0, self.img_size[0])
         x1 = center_x + width / 2.0
+        x1 = tf.clip_by_value(x1, 0, self.img_size[1])
         y1 = center_y + height / 2.0
+        y1 = tf.clip_by_value(y1, 0, self.img_size[0])
 
         boxes = tf.concat([x0, y0, x1, y1, objectness, class_probs], axis=-1)
-        # boxes = tf.concat([x0, y0, x1, y1], axis=-1)
 
         return boxes
 

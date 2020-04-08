@@ -7,8 +7,8 @@
 # You are solely responsible for determining the appropriateness of using and distributing the software and you assume all risks associated with its use, including but not limited to the risks and costs of program errors, compliance with applicable laws, damage to or loss of data, programs or equipment, and the unavailability or interruption of operation. This software is not intended to be used in any situation where a failure could cause risk of injury or damage to property. The software developed by NIST employees is not subject to copyright protection within the United States.
 
 #source ~/anaconda3/etc/profile.d/conda.sh
-conda create -n tf2 python=3.6
-conda activate tf2
+conda create -n tf python=3.6
+conda activate tf
 
 conda install numpy tensorflow-gpu python-lmdb scikit-image pandas scikit-learn -y
 

@@ -90,6 +90,7 @@ def generate_database(csv_files, img_files, output_folder, database_name):
         present_classes = np.unique(boxes[:,4].squeeze()).astype(np.int32)
         key_str = os.path.basename(csv_fp)
         key_str, _ = os.path.splitext(key_str)
+        key_str = "{}_{}".format(txn_nb, key_str)
         present_classes_list = [str(k) for k in present_classes]
         class_str = ','.join(present_classes_list)
         key_str = key_str + ':' + class_str

@@ -254,7 +254,7 @@ class ImageReader:
         # move box x,y to middle from upper left
         box_xy = np.floor(box_xy + ((box_wh - 1) / 2.0))
         boxes[:, 0:2] = box_xy
-        boxes[:, 2:4] = box_wh
+        # boxes is [x, y, w, h] where (x, y) is the center of the box
 
         anchors_max = anchors / 2.0
         anchors_min = -anchors_max

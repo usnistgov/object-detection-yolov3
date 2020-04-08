@@ -32,7 +32,7 @@ def inference(image_folder, image_format, saved_model_filepath, output_folder, m
     img_filepath_list = [os.path.join(image_folder, fn) for fn in os.listdir(image_folder) if fn.endswith('.{}'.format(image_format))]
 
     # load the saved model
-    model = tf.saved_model.load(saved_model_filepath)
+    yolo_model = tf.saved_model.load(saved_model_filepath)
 
     print('Starting inference of file list')
     for i in range(len(img_filepath_list)):
@@ -54,8 +54,8 @@ def inference(image_folder, image_format, saved_model_filepath, output_folder, m
         batch_data = batch_data.reshape((1, batch_data.shape[0], batch_data.shape[1], batch_data.shape[2]))
         batch_data = tf.convert_to_tensor(batch_data)
 
-        boxes = model(batch_data, training=False)
-        # boxes are [ltrbc]
+        boxes = yolo_model(batch_data, training=False)
+        # boxes are [x1,y1,x2,y2,c]
 
         # strip out batch_size which is fixed at one
         boxes = np.array(boxes)
@@ -69,14 +69,28 @@ def inference(image_folder, image_format, saved_model_filepath, output_folder, m
 
         # nms boxes per tile being passed through the network
         boxes, scores, class_label = bbox_utils.per_class_nms(boxes, objectness, class_probs)
+        # convert [x1, y1, x2, y2] to [x, y, w, h]
+        boxes[:, 2] = boxes[:, 2] - boxes[:, 0]
+        boxes[:, 3] = boxes[:, 3] - boxes[:, 1]
+
         class_label = np.reshape(class_label, (-1, 1))
         boxes = np.concatenate((boxes, class_label), axis=-1)
         boxes = boxes.astype(np.int32)
 
+        # # draw boxes on the images and save
+        # import skimage.io
+        # ofp = './inference-results'
+        # img = img - np.min(img)
+        # img = img / np.max(img)
+        # img = np.asarray(img * 255, dtype=np.uint8)
+        # fn = '{:08d}.png'.format(i)
+        # print(boxes)
+        # skimage.io.imsave(os.path.join(ofp, fn), bbox_utils.draw_boxes(img.copy(), boxes))
+
         # write merged rois
         print('Found: {} rois'.format(boxes.shape[0]))
         output_csv_file = os.path.join(output_folder, file_name.replace(image_format, 'csv'))
-        bbox_utils.write_boxes_from_ltrbc(boxes, output_csv_file)
+        bbox_utils.write_boxes_from_xywhc(boxes, output_csv_file)
 
 
 if __name__ == "__main__":

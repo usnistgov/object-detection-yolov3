@@ -202,6 +202,7 @@ def train_model(batch_size, test_every_n_steps, train_database_filepath, test_da
             print('Shutting down test_reader')
             test_reader.shutdown()
 
+
     # convert training checkpoint to the saved model format
     if training_checkpoint_filepath is not None:
         print('Converting checkpoint into Saved_Model')

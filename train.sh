@@ -25,7 +25,7 @@ test_database="./data/test-example.lmdb"
 output_folder="./model/"
 
 # what learning rate should the network use
-learning_rate=1e-4 # Karpathy Constant
+learning_rate=1e-4
 use_augmentation=1 # {0, 1}
 
 # END MODIFY THESE OPTIONS

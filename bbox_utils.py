@@ -237,6 +237,7 @@ def single_class_nms(boxes, scores, iou_threshold):
 
 def per_class_nms(boxes, objectness, class_probs, iou_threshold=0.3, score_threshold=0.1):
     # all boxes belong to the same image
+    # boxes are [x1, y1, x2, y2]
 
     num_classes = class_probs.shape[1]
     scores = class_probs * objectness  # create blend of objectness and probs
@@ -269,6 +270,7 @@ def per_class_nms(boxes, objectness, class_probs, iou_threshold=0.3, score_thres
 
 
 def filter_small_boxes(boxes, min_size):
+    # boxes is [x1, y1, x2, y2] i.e. [l, t, r, b]
     # filter out any boxes which have a width or height < 32 pixels
     w = boxes[:, 2] - boxes[:, 0]
     h = boxes[:, 3] - boxes[:, 1]
