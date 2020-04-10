@@ -1,27 +1,25 @@
-# NIST-developed software is provided by NIST as a public service. You may use, copy and distribute copies of the software in any medium, provided that you keep intact this entire notice. You may improve, modify and create derivative works of the software or any portion of the software, and you may copy and distribute such modifications or works. Modified works should carry a notice stating that you changed the software and should note the date and nature of any such change. Please explicitly acknowledge the National Institute of Standards and Technology as the source of the software.
-
-# NIST-developed software is expressly provided "AS IS." NIST MAKES NO WARRANTY OF ANY KIND, EXPRESS, IMPLIED, IN FACT OR ARISING BY OPERATION OF LAW, INCLUDING, WITHOUT LIMITATION, THE IMPLIED WARRANTY OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT AND DATA ACCURACY. NIST NEITHER REPRESENTS NOR WARRANTS THAT THE OPERATION OF THE SOFTWARE WILL BE UNINTERRUPTED OR ERROR-FREE, OR THAT ANY DEFECTS WILL BE CORRECTED. NIST DOES NOT WARRANT OR MAKE ANY REPRESENTATIONS REGARDING THE USE OF THE SOFTWARE OR THE RESULTS THEREOF, INCLUDING BUT NOT LIMITED TO THE CORRECTNESS, ACCURACY, RELIABILITY, OR USEFULNESS OF THE SOFTWARE.
-
-# You are solely responsible for determining the appropriateness of using and distributing the software and you assume all risks associated with its use, including but not limited to the risks and costs of program errors, compliance with applicable laws, damage to or loss of data, programs or equipment, and the unavailability or interruption of operation. This software is not intended to be used in any situation where a failure could cause risk of injury or damage to property. The software developed by NIST employees is not subject to copyright protection within the United States.
-
 import sys
 if sys.version_info[0] < 3:
     raise RuntimeError('Python3 required')
 
-import tensorflow as tf
-tf_version = tf.__version__.split('.')
-if int(tf_version[0]) != 2:
-    raise RuntimeError('Tensorflow 2.x.x required')
-
-import argparse
 import os
+# set the system environment so that the PCIe GPU ids match the Nvidia ids in nvidia-smi
+os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+# gpus_to_use must bs comma separated list of gpu ids, e.g. "1,3,4"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # "0, 1" for multiple
+
 import numpy as np
+import torch.utils.data
+import skimage.io
+import json
 
+import yolo_dataset
+import model
+import utils
 import bbox_utils
-import imagereader
 
 
-def inference(image_folder, image_format, saved_model_filepath, output_folder, min_box_size):
+def inference(image_folder, image_format, checkpoint_filepath, output_folder, min_box_size):
     # create output filepath
     if not os.path.exists(output_folder):
         os.mkdir(output_folder)
@@ -32,80 +30,73 @@ def inference(image_folder, image_format, saved_model_filepath, output_folder, m
     img_filepath_list = [os.path.join(image_folder, fn) for fn in os.listdir(image_folder) if fn.endswith('.{}'.format(image_format))]
 
     # load the saved model
-    yolo_model = tf.saved_model.load(saved_model_filepath)
+    ckpt_folder, _ = os.path.split(checkpoint_filepath)
+    config_fp = os.path.join(ckpt_folder, 'config.json')
+    if not os.path.exists(config_fp):
+        raise RuntimeError('Could not find config.json in checkpoint directory')
+    with open(config_fp, 'r') as fp:
+        config = json.load(fp)
+
+    yolo_model = model.YoloV3(config)
+    checkpoint = torch.load(checkpoint_filepath)
+    yolo_model.load_state_dict(checkpoint['model_state_dict'])
+
+    yolo_model = yolo_model.cuda()
+    yolo_model.eval()
 
     print('Starting inference of file list')
-    for i in range(len(img_filepath_list)):
-        img_filepath = img_filepath_list[i]
-        _, file_name = os.path.split(img_filepath)
-        print('{}/{} : {}'.format(i, len(img_filepath_list), file_name))
+    with torch.no_grad():
+        for i in range(len(img_filepath_list)):
+            img_filepath = img_filepath_list[i]
+            _, file_name = os.path.split(img_filepath)
+            print('{}/{} : {}'.format(i, len(img_filepath_list), file_name))
 
-        print('Loading image: {}'.format(img_filepath))
-        img = imagereader.imread(img_filepath)
-        height, width, channels = img.shape
-        img = img.astype(np.float32)
+            print('Loading image: {}'.format(img_filepath))
+            img = skimage.io.imread(img_filepath)
+            orig_img = img.copy()
+            img = img.astype(np.float32)
 
-        # normalize with whole image stats
-        img = imagereader.zscore_normalize(img)
-        print('  img.shape={}'.format(img.shape))
+            # normalize with whole image stats
+            img = yolo_dataset.YoloDataset.zscore_normalize(img)
+            print('  img.shape={}'.format(img.shape))
 
-        # convert HWC to CHW
-        batch_data = img.transpose((2, 0, 1))
-        # convert CHW to NCHW
-        batch_data = batch_data.reshape((1, batch_data.shape[0], batch_data.shape[1], batch_data.shape[2]))
-        batch_data = tf.convert_to_tensor(batch_data)
+            # convert HWC to CHW
+            batch_data = yolo_dataset.YoloDataset.format_image(img)
+            batch_data = np.expand_dims(batch_data, axis=0)  # add phantom batch size of 1
+            batch_data = torch.from_numpy(batch_data)
+            batch_data = batch_data.cuda(non_blocking=True)
 
-        boxes = yolo_model(batch_data, training=False)
-        # boxes are [x1,y1,x2,y2,c]
+            predictions = yolo_model(batch_data)
+            # boxes are [x1,y1,x2,y2,c]
+            predictions = utils.postprocess(predictions, yolo_model.number_classes, score_threshold=0.1, iou_threshold=0.3, min_box_size=min_box_size)
+            predictions = predictions[0] # extract off batch size of 1 since postprocess returns a list of batch_size
+            predictions = predictions.cpu().numpy()
 
-        # constrain boxes to image coordinates
-        boxes[:, 0] = np.clip(boxes[:, 0], 0, width)
-        boxes[:, 1] = np.clip(boxes[:, 1], 0, height)
-        boxes[:, 2] = np.clip(boxes[:, 2], 0, width)
-        boxes[:, 3] = np.clip(boxes[:, 3], 0, height)
+            scores = predictions[:, 4]
+            class_label = predictions[:, 5]
+            boxes = predictions[:, 0:4]
+            boxes = np.round(boxes)
 
+            class_label = np.reshape(class_label, (-1, 1))
+            boxes = np.concatenate((boxes, class_label), axis=-1)
+            boxes = boxes.astype(np.int32)
 
-        # strip out batch_size which is fixed at one
-        boxes = np.array(boxes)
-        boxes = boxes[0,]
+            # draw boxes on the images and save
+            print(boxes)
+            skimage.io.imsave(os.path.join(output_folder, file_name), bbox_utils.draw_boxes(orig_img, boxes))
 
-        boxes = bbox_utils.filter_small_boxes(boxes, min_box_size)
-
-        objectness = boxes[:, 4:5]
-        class_probs = boxes[:, 5:]
-        boxes = boxes[:, 0:4]
-
-        # nms boxes per tile being passed through the network
-        boxes, scores, class_label = bbox_utils.per_class_nms(boxes, objectness, class_probs)
-        # convert [x1, y1, x2, y2] to [x, y, w, h]
-        boxes[:, 2] = boxes[:, 2] - boxes[:, 0]
-        boxes[:, 3] = boxes[:, 3] - boxes[:, 1]
-
-        class_label = np.reshape(class_label, (-1, 1))
-        boxes = np.concatenate((boxes, class_label), axis=-1)
-        boxes = boxes.astype(np.int32)
-
-        # # draw boxes on the images and save
-        # import skimage.io
-        # ofp = './inference-results'
-        # img = img - np.min(img)
-        # img = img / np.max(img)
-        # img = np.asarray(img * 255, dtype=np.uint8)
-        # fn = '{:08d}.png'.format(i)
-        # print(boxes)
-        # skimage.io.imsave(os.path.join(ofp, fn), bbox_utils.draw_boxes(img.copy(), boxes))
-
-        # write merged rois
-        print('Found: {} rois'.format(boxes.shape[0]))
-        output_csv_file = os.path.join(output_folder, file_name.replace(image_format, 'csv'))
-        bbox_utils.write_boxes_from_xywhc(boxes, output_csv_file)
+            # write merged rois
+            print('Found: {} rois'.format(boxes.shape[0]))
+            output_csv_file = os.path.join(output_folder, file_name.replace(image_format, 'csv'))
+            bbox_utils.write_boxes_from_xywhc(boxes, output_csv_file)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(prog='inference', description='Script to detect stars with the selected model')
+    import argparse
+    parser = argparse.ArgumentParser(prog='inference', description='Script to detect objects with the selected model')
 
-    parser.add_argument('--saved-model-filepath', type=str,
-                        help='Filepath to the saved model to use', required=True)
+    parser.add_argument('--checkpoint-filepath', type=str,
+                        help='Filepath to the pytroch checkpoint to use', required=True)
     parser.add_argument('--output-folder', type=str, required=True)
     parser.add_argument('--image-folder', dest='image_folder', type=str,
                         help='filepath to the folder containing tif images to inference (Required)', required=True)
@@ -115,21 +106,17 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    saved_model_filepath = args.saved_model_filepath
+    checkpoint_filepath = args.checkpoint_filepath
     image_folder = args.image_folder
     output_folder = args.output_folder
     image_format = args.image_format
     min_box_size = args.min_box_size
 
     print('Arguments:')
-    print('saved_model_filepath = {}'.format(saved_model_filepath))
+    print('checkpoint_filepath = {}'.format(checkpoint_filepath))
     print('image_folder = {}'.format(image_folder))
     print('output_folder = {}'.format(output_folder))
     print('image_format = {}'.format(image_format))
     print('min_box_size = {}'.format(min_box_size))
 
-    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"  # so the IDs match nvidia-smi
-    str_gpu_ids = "0"
-    os.environ["CUDA_VISIBLE_DEVICES"] = str_gpu_ids
-
-    inference(image_folder, image_format, saved_model_filepath, output_folder, min_box_size)
+    inference(image_folder, image_format, checkpoint_filepath, output_folder, min_box_size)

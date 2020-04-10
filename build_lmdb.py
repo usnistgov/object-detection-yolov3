@@ -81,29 +81,36 @@ def generate_database(csv_files, img_files, output_folder, database_name):
     image_txn = image_env.begin(write=True)
 
     txn_nb = 0
-    for i in range(len(img_files)):
-        img_fp = img_files[i]
-        csv_fp = csv_files[i]
 
-        img = read_image(img_fp)
-        boxes = bbox_utils.load_boxes_to_xywhc(csv_fp)
-        present_classes = np.unique(boxes[:,4].squeeze()).astype(np.int32)
-        key_str = os.path.basename(csv_fp)
-        key_str, _ = os.path.splitext(key_str)
-        key_str = "{}_{}".format(txn_nb, key_str)
-        present_classes_list = [str(k) for k in present_classes]
-        class_str = ','.join(present_classes_list)
-        key_str = key_str + ':' + class_str
+    # TODO remove this debug code
+    factor = 100
+    if 'test' in database_name:
+        factor = 1
+    for rep in range(factor):
+        for i in range(len(img_files)):
+            img_fp = img_files[i]
+            csv_fp = csv_files[i]
 
-        txn_nb += 1
-        write_img_to_db(image_txn, img, boxes, key_str)
+            img = read_image(img_fp)
+            boxes = bbox_utils.load_boxes_to_xywhc(csv_fp)
+            present_classes = np.unique(boxes[:,4].squeeze()).astype(np.int32)
+            key_str = os.path.basename(csv_fp)
+            key_str, _ = os.path.splitext(key_str)
+            key_str = "{}_{}".format(txn_nb, key_str)
+            present_classes_list = [str(k) for k in present_classes]
+            class_str = ','.join(present_classes_list)
+            key_str = key_str + ':' + class_str
 
-        if txn_nb % 1000 == 0:
-            image_txn.commit()
-            image_txn = image_env.begin(write=True)
+            txn_nb += 1
+            write_img_to_db(image_txn, img, boxes, key_str)
+
+            if txn_nb % 1000 == 0:
+                image_txn.commit()
+                image_txn = image_env.begin(write=True)
 
     image_txn.commit()
     image_env.close()
+    print('  database has {} elements'.format(txn_nb))
 
     with open(os.path.join(output_image_lmdb_file, 'annotation_list.csv'), 'w') as fh:
         for key_str in csv_files:

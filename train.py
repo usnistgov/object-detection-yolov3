@@ -1,266 +1,241 @@
-# NIST-developed software is provided by NIST as a public service. You may use, copy and distribute copies of the software in any medium, provided that you keep intact this entire notice. You may improve, modify and create derivative works of the software or any portion of the software, and you may copy and distribute such modifications or works. Modified works should carry a notice stating that you changed the software and should note the date and nature of any such change. Please explicitly acknowledge the National Institute of Standards and Technology as the source of the software.
-
-# NIST-developed software is expressly provided "AS IS." NIST MAKES NO WARRANTY OF ANY KIND, EXPRESS, IMPLIED, IN FACT OR ARISING BY OPERATION OF LAW, INCLUDING, WITHOUT LIMITATION, THE IMPLIED WARRANTY OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT AND DATA ACCURACY. NIST NEITHER REPRESENTS NOR WARRANTS THAT THE OPERATION OF THE SOFTWARE WILL BE UNINTERRUPTED OR ERROR-FREE, OR THAT ANY DEFECTS WILL BE CORRECTED. NIST DOES NOT WARRANT OR MAKE ANY REPRESENTATIONS REGARDING THE USE OF THE SOFTWARE OR THE RESULTS THEREOF, INCLUDING BUT NOT LIMITED TO THE CORRECTNESS, ACCURACY, RELIABILITY, OR USEFULNESS OF THE SOFTWARE.
-
-# You are solely responsible for determining the appropriateness of using and distributing the software and you assume all risks associated with its use, including but not limited to the risks and costs of program errors, compliance with applicable laws, damage to or loss of data, programs or equipment, and the unavailability or interruption of operation. This software is not intended to be used in any situation where a failure could cause risk of injury or damage to property. The software developed by NIST employees is not subject to copyright protection within the United States.
-
 import sys
 if sys.version_info[0] < 3:
     raise RuntimeError('Python3 required')
 
+import matplotlib as mpl
+
+mpl.use('Agg')
+import matplotlib.pyplot as plt
+
 import os
 # set the system environment so that the PCIe GPU ids match the Nvidia ids in nvidia-smi
-os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"  # so the IDs match nvidia-smi
-import datetime
-
-READER_COUNT = 3  # per gpu
+# os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+# gpus_to_use must bs comma separated list of gpu ids, e.g. "1,3,4"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,3,4"  # "0, 1" for multiple
+# os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # "0, 1" for multiple
 
 import numpy as np
-import tensorflow as tf
-if int(tf.__version__.split('.')[0]) != 2:
-    raise RuntimeError('Tensorflow 2.x.x required')
+import torch.utils.data
+import json
 
+import yolo_dataset
 import model
-import imagereader
-import time
 
 
-def train_model(batch_size, test_every_n_steps, train_database_filepath, test_database_filepath, output_folder, early_stopping_count, learning_rate, use_augmentation):
+def plot(train_loss, test_loss, name, output_folder=None):
+    mpl.rcParams['agg.path.chunksize'] = 10000  # fix for error in plotting large numbers of points
+
+    fig = plt.figure(figsize=(16, 9), dpi=200)
+    ax = plt.gca()
+
+    plt.title("Test Loss {} vs. Number of Training Epochs".format(name))
+    plt.xlabel("Training Epochs")
+    plt.ylabel("Loss")
+    train_scale_factor = float(len(test_loss)) / float(len(train_loss))
+    x_vals = np.asarray(list(range(len(train_loss)))) * train_scale_factor
+    y_vals = np.asarray(train_loss)
+    ax.scatter(x_vals, y_vals, c='b', s=1, label="Train")
+    x_vals = np.asarray(list(range(len(test_loss)))) + 1
+    y_vals = np.asarray(test_loss)
+    ax.plot(x_vals, y_vals, 'r-', marker='o', markersize=4, label="Test", linewidth=1)
+    ax.set_yscale('log')
+    nbs = list()
+    nbs.extend(train_loss)
+    nbs.extend(test_loss)
+    nbs = np.asarray(nbs)
+    p99 = np.percentile(nbs, 99)
+    idx = np.nonzero(nbs)[0]
+    if len(idx) > 0:
+        mv = np.min(nbs[np.nonzero(nbs)[0]])
+    else:
+        mv = 1e-8
+    plt.ylim((mv, p99))
+    plt.legend()
+    fn = '{}.png'.format(name)
+    if output_folder is not None:
+        fig.savefig(os.path.join(output_folder, fn))
+    else:
+        fig.savefig(fn)
+    plt.close(fig)
+
+
+def train_model(config, output_folder, early_stopping_count):
     if not os.path.exists(output_folder):
         os.makedirs(output_folder)
 
-    anchors = [(32, 32), (128, 128), (256, 256)]
+    use_gpu = torch.cuda.is_available()
+    num_workers = 10 #int(config['batch_size'] / 2)
 
-    training_checkpoint_filepath = None
+    torch_mdoel_ofp = './checkpoint'
+    if os.path.exists(torch_mdoel_ofp):
+        import shutil
+        shutil.rmtree(torch_mdoel_ofp)
+    os.makedirs(torch_mdoel_ofp)
 
-    # uses all available devices
-    mirrored_strategy = tf.distribute.MirroredStrategy()
-    with mirrored_strategy.scope():
-        # scale the batch size based on the GPU count
-        global_batch_size = batch_size * mirrored_strategy.num_replicas_in_sync
-        # scale the number of I/O readers based on the GPU count
-        reader_count = READER_COUNT * mirrored_strategy.num_replicas_in_sync
+    pin_dataloader_memory = True
 
-        print('Setting up test image reader')
-        test_reader = imagereader.ImageReader(test_database_filepath, anchors, use_augmentation=False, shuffle=False, num_workers=reader_count)
-        print('Test Reader has {} images'.format(test_reader.get_image_count()))
+    train_dataset = yolo_dataset.YoloDataset(config['train_lmdb_filepath'], augment=config['augment'])
+    train_sampler = train_dataset.get_weighted_sampler()  # this tells pytorch how to weight samples to balance the classes
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=config['batch_size'], num_workers=num_workers, sampler=train_sampler, pin_memory=pin_dataloader_memory, drop_last=True)
 
-        print('Setting up training image reader')
-        train_reader = imagereader.ImageReader(train_database_filepath, anchors, use_augmentation=use_augmentation, shuffle=True, num_workers=reader_count, balance_classes=True)
-        print('Train Reader has {} images'.format(train_reader.get_image_count()))
+    test_dataset = yolo_dataset.YoloDataset(config['test_lmdb_filepath'], augment=False)
+    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=config['batch_size'], num_workers=num_workers, pin_memory=pin_dataloader_memory, drop_last=True)
 
-        try:  # if any errors happen we want to catch them and shut down the multiprocess readers
-            print('Starting Readers')
-            train_reader.startup()
-            print('  train_reader online')
-            test_reader.startup()
-            print('  test_reader online')
+    config['number_classes'] = train_dataset.get_number_classes()
+    config['image_size'] = train_dataset.get_image_shape()
 
-            train_dataset = train_reader.get_tf_dataset()
-            train_dataset = train_dataset.batch(global_batch_size).prefetch(reader_count)
-            train_dataset = mirrored_strategy.experimental_distribute_dataset(train_dataset)
+    config_ofp = os.path.join(torch_mdoel_ofp, 'config.json')
+    with open(config_ofp, 'w') as fp:
+        json.dump(config, fp)
+    yolo_model = model.YoloV3(config)
+    if use_gpu:
+        yolo_model = torch.nn.DataParallel(yolo_model)
+        # move model to GPU
+        yolo_model = yolo_model.cuda()
 
-            test_dataset = test_reader.get_tf_dataset()
-            test_dataset = test_dataset.batch(global_batch_size).prefetch(reader_count)
-            test_dataset = mirrored_strategy.experimental_distribute_dataset(test_dataset)
+    optimizer = torch.optim.Adam(yolo_model.parameters(), lr=config['learning_rate'])
 
-            print('Creating model')
-            number_classes = train_reader.get_number_classes()
-            yolo = model.YoloV3(global_batch_size, train_reader.get_image_size(), number_classes, anchors, learning_rate)
-
-            checkpoint = tf.train.Checkpoint(optimizer=yolo.get_optimizer(), model=yolo.get_keras_model())
-
-            # train_epoch_size = train_reader.get_image_count()/batch_size
-            train_epoch_size = test_every_n_steps
-            test_epoch_size = test_reader.get_image_count() / batch_size
-
-            test_loss = list()
-            # Prepare the metrics.
-            train_loss_metric = tf.keras.metrics.Mean('train_loss', dtype=tf.float32)
-            train_loss_xy_metric = tf.keras.metrics.Mean('train_loss_xy', dtype=tf.float32)
-            train_loss_wh_metric = tf.keras.metrics.Mean('train_loss_wh', dtype=tf.float32)
-            train_loss_objectness_metric = tf.keras.metrics.Mean('train_loss_obj', dtype=tf.float32)
-            train_loss_class_metric = tf.keras.metrics.Mean('train_loss_class', dtype=tf.float32)
-
-            test_loss_metric = tf.keras.metrics.Mean('test_loss', dtype=tf.float32)
-            test_loss_xy_metric = tf.keras.metrics.Mean('test_loss_xy', dtype=tf.float32)
-            test_loss_wh_metric = tf.keras.metrics.Mean('test_loss_wh', dtype=tf.float32)
-            test_loss_objectness_metric = tf.keras.metrics.Mean('test_loss_obj', dtype=tf.float32)
-            test_loss_class_metric = tf.keras.metrics.Mean('test_loss_class', dtype=tf.float32)
-
-            current_time = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
-            train_log_dir = os.path.join(output_folder, 'tensorboard-' + current_time, 'train')
-            if not os.path.exists(train_log_dir):
-                os.makedirs(train_log_dir)
-            test_log_dir = os.path.join(output_folder, 'tensorboard-' + current_time, 'test')
-            if not os.path.exists(test_log_dir):
-                os.makedirs(test_log_dir)
-
-            train_summary_writer = tf.summary.create_file_writer(train_log_dir)
-            test_summary_writer = tf.summary.create_file_writer(test_log_dir)
-
-            epoch = 0
-            print('Running Network')
-            while True:  # loop until early stopping
-                print('---- Epoch: {} ----'.format(epoch))
-                if epoch == 0:
-                    cur_train_epoch_size = min(1000, train_epoch_size)
-                    print('Performing Adam Optimizer learning rate warmup for {} steps'.format(cur_train_epoch_size))
-                    yolo.set_learning_rate(learning_rate / 10)
-                else:
-                    cur_train_epoch_size = train_epoch_size
-                    yolo.set_learning_rate(learning_rate)
-
-                # Iterate over the batches of the train dataset.
-                start_time = time.time()
-                for step, (batch_images, label_1_batch, label_2_batch, label_3_batch) in enumerate(train_dataset):
-                    if step > cur_train_epoch_size:
-                        break
-
-                    label_batch = (label_1_batch, label_2_batch, label_3_batch)
-                    inputs = (batch_images, label_batch, train_loss_metric, train_loss_xy_metric, train_loss_wh_metric, train_loss_objectness_metric, train_loss_class_metric)
-                    loss_value = yolo.dist_train_step(mirrored_strategy, inputs)
-                    if np.isnan(loss_value):
-                        raise RuntimeError('Training Loss went to NaN, try a lower learning rate')
-
-                    print('Train Epoch {}: Batch {}/{}: Loss {}'.format(epoch, step, train_epoch_size, train_loss_metric.result()))
-                    with train_summary_writer.as_default():
-                        tf.summary.scalar('loss', train_loss_metric.result(), step=int(epoch * train_epoch_size + step))
-                        tf.summary.scalar('loss_xy', train_loss_xy_metric.result(), step=int(epoch * train_epoch_size + step))
-                        tf.summary.scalar('loss_wh', train_loss_wh_metric.result(), step=int(epoch * train_epoch_size + step))
-                        tf.summary.scalar('loss_obj', train_loss_objectness_metric.result(), step=int(epoch * train_epoch_size + step))
-                        tf.summary.scalar('loss_class', train_loss_class_metric.result(), step=int(epoch * train_epoch_size + step))
-
-                    train_loss_metric.reset_states()
-                    train_loss_xy_metric.reset_states()
-                    train_loss_wh_metric.reset_states()
-                    train_loss_objectness_metric.reset_states()
-                    train_loss_class_metric.reset_states()
-
-                # Iterate over the batches of the test dataset.
-                epoch_test_loss = list()
-                for step, (batch_images, label_1_batch, label_2_batch, label_3_batch) in enumerate(test_dataset):
-                    if step > test_epoch_size:
-                        break
-
-                    label_batch = (label_1_batch, label_2_batch, label_3_batch)
-                    inputs = (batch_images, label_batch, test_loss_metric, test_loss_xy_metric, test_loss_wh_metric, test_loss_objectness_metric, test_loss_class_metric)
-                    loss_value = yolo.dist_test_step(mirrored_strategy, inputs)
-                    if np.isnan(loss_value):
-                        raise RuntimeError('Test Loss went to NaN')
-
-                    epoch_test_loss.append(loss_value.numpy())
-                    # print('Test Epoch {}: Batch {}/{}: Loss {}'.format(epoch, step, test_epoch_size, loss_value))
-                test_loss.append(np.mean(epoch_test_loss))
-
-                print('Test Epoch: {}: Loss = {}'.format(epoch, test_loss_metric.result()))
-                with test_summary_writer.as_default():
-                    tf.summary.scalar('loss', test_loss_metric.result(), step=int((epoch + 1) * train_epoch_size))
-                    tf.summary.scalar('loss_xy', test_loss_xy_metric.result(), step=int((epoch + 1) * train_epoch_size))
-                    tf.summary.scalar('loss_wh', test_loss_wh_metric.result(), step=int((epoch + 1) * train_epoch_size))
-                    tf.summary.scalar('loss_obj', test_loss_objectness_metric.result(), step=int((epoch + 1) * train_epoch_size))
-                    tf.summary.scalar('loss_class', test_loss_class_metric.result(), step=int((epoch + 1) * train_epoch_size))
-                test_loss_metric.reset_states()
-                test_loss_xy_metric.reset_states()
-                test_loss_wh_metric.reset_states()
-                test_loss_objectness_metric.reset_states()
-                test_loss_class_metric.reset_states()
-
-                with open(os.path.join(output_folder, 'test_loss.csv'), 'w') as csvfile:
-                    for i in range(len(test_loss)):
-                        csvfile.write(str(test_loss[i]))
-                        csvfile.write('\n')
-
-                print('Epoch took: {} s'.format(time.time() - start_time))
-
-                # determine if to record a new checkpoint based on best test loss
-                if (len(test_loss) - 1) == np.argmin(test_loss):
-                    # save tf checkpoint
-                    print('Test loss improved: {}, saving checkpoint'.format(np.min(test_loss)))
-                    # checkpoint.save(os.path.join(output_folder, 'checkpoint', "ckpt")) # does not overwrite
-                    training_checkpoint_filepath = checkpoint.write(os.path.join(output_folder, 'checkpoint', "ckpt"))
-
-                # determine early stopping
-                CONVERGENCE_TOLERANCE = 1e-4
-                print('Best Current Epoch Selection:')
-                print('Test Loss:')
-                print(test_loss)
-                min_test_loss = np.min(test_loss)
-                error_from_best = np.abs(test_loss - min_test_loss)
-                error_from_best[error_from_best < CONVERGENCE_TOLERANCE] = 0
-                best_epoch = np.where(error_from_best == 0)[0][
-                    0]  # unpack numpy array, select first time since that value has happened
-                print('Best epoch: {}'.format(best_epoch))
-
-                if len(test_loss) - best_epoch > early_stopping_count:
-                    break  # break the epoch loop
-                epoch = epoch + 1
-
-        finally:  # if any errors happened during training, shut down the disk readers
-            print('Shutting down train_reader')
-            train_reader.shutdown()
-            print('Shutting down test_reader')
-            test_reader.shutdown()
+    loss_keys = ['total', 'xy', 'wh', 'obj', 'cls']
+    train_loss = list()
+    train_loss_dict = dict()
+    for name in loss_keys:
+        train_loss_dict[name] = list()
 
 
-    # convert training checkpoint to the saved model format
-    if training_checkpoint_filepath is not None:
-        print('Converting checkpoint into Saved_Model')
-        # restore the checkpoint (outside of the distributed trained) and generate a saved model
-        print('Model parameters:')
-        print('  global_batch_size = {}'.format(global_batch_size))
-        print('  img_size = {}'.format(train_reader.get_image_size()))
-        print('  number_classes = {}'.format(number_classes))
-        print('  anchors = {}'.format(anchors))
-        print('  learning_rate = {}'.format(learning_rate))
-        yolo = model.YoloV3(global_batch_size, train_reader.get_image_size(), number_classes, anchors, learning_rate)
+    test_loss_dict = dict()
+    for name in loss_keys:
+        test_loss_dict[name] = list()
+    epoch = 0
+    while True:
+        print('-' * 10)
+        print('Epoch {}'.format(epoch))
 
-        checkpoint = tf.train.Checkpoint(optimizer=yolo.get_optimizer(), model=yolo.get_keras_model())
-        checkpoint.restore(training_checkpoint_filepath).expect_partial()
-        tf.saved_model.save(yolo.get_keras_model(), os.path.join(output_folder, 'saved_model'))
+        print('running training epoch')
+        yolo_model.train()  # put the model in training mode
+        batch_count = 0
+        for i, (images, target) in enumerate(train_loader):
+            if use_gpu:
+                images = images.cuda(non_blocking=True)
+                target = target.cuda(non_blocking=True)
+
+            optimizer.zero_grad()
+            batch_count = batch_count + 1
+
+            # compute output
+            loss = yolo_model(images, target)
+            # loss is [1, 5]
+
+            for l_idx in range(len(loss_keys)):
+                train_loss_dict[loss_keys[l_idx]].append(float(loss[0, l_idx].detach().cpu().numpy()))
+            train_loss.append(train_loss_dict[loss_keys[0]])
+            print("batch {}/{} loss {}".format(i, len(train_loader), train_loss_dict[loss_keys[0]][-1]))
+
+            loss = loss[0, 0]
+
+            # compute gradient and do SGD step
+            loss.backward()
+            optimizer.step()
+
+        for key in loss_keys:
+            print('  loss {} = {}'.format(key, np.average(train_loss_dict[key][-batch_count:])))
+
+        print('running test epoch')
+        yolo_model.eval()
+        epoch_test_loss_dict = dict()
+        for name in loss_keys:
+            epoch_test_loss_dict[name] = list()
+        with torch.no_grad():
+            for i, (images, target) in enumerate(test_loader):
+                if use_gpu:
+                    images = images.cuda(non_blocking=True)
+                    target = target.cuda(non_blocking=True)
+
+                optimizer.zero_grad()
+
+                # compute output
+                loss = yolo_model(images, target)
+                # loss is [1, 5]
+
+                for l_idx in range(len(loss_keys)):
+                    epoch_test_loss_dict[loss_keys[l_idx]].append(float(loss[0, l_idx].detach().cpu().numpy()))
+
+        for key in loss_keys:
+            test_loss_dict[key].append(np.average(epoch_test_loss_dict[key]))
+
+        print('Test Loss')
+        for key in train_loss_dict.keys():
+            print('  loss {} = {}'.format(key, test_loss_dict[key][-1]))
+
+        for key in loss_keys:
+            plot(train_loss_dict[key], test_loss_dict[key], "{}_loss".format(key), output_folder)
+
+        CONVERGENCE_TOLERANCE = 1e-4
+        print('Best Current Epoch Selection:')
+        print('Test Loss:')
+        test_loss = test_loss_dict[loss_keys[0]]
+        print(test_loss)
+        min_test_loss = np.min(test_loss)
+        error_from_best = np.abs(test_loss - min_test_loss)
+        error_from_best[error_from_best < CONVERGENCE_TOLERANCE] = 0
+        best_epoch = np.where(error_from_best == 0)[0][0]  # unpack numpy array, select first time since that value has happened
+        print('Best epoch: {}'.format(best_epoch))
+
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': yolo_model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict()
+        }, os.path.join(torch_mdoel_ofp, 'yolov3.ckpt'))
+
+        if len(test_loss) - best_epoch > early_stopping_count:
+            break  # break the epoch loop
+        epoch = epoch + 1
 
 
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(prog='train_yolo', description='Script which trains a yolo_v3 model')
+    parser = argparse.ArgumentParser(prog='train', description='Script which trains a yolo_v3 model')
 
     parser.add_argument('--batch_size', dest='batch_size', type=int,
                         help='training batch size', default=8)
     parser.add_argument('--learning_rate', dest='learning_rate', type=float, default=1e-4)
-    parser.add_argument('--test_every_n_steps', dest='test_every_n_steps', type=int,
-                        help='number of gradient update steps to take between test runs', default=1000)
     parser.add_argument('--train_database', dest='train_database_filepath', type=str,
                         help='lmdb database to use for (Required)', required=True)
     parser.add_argument('--test_database', dest='test_database_filepath', type=str,
                         help='lmdb database to use for testing (Required)', required=True)
     parser.add_argument('--output_dir', dest='output_folder', type=str,
                         help='Folder where outputs will be saved (Required)', required=True)
-    parser.add_argument('--early_stopping', dest='terminate_after_num_epochs_without_test_loss_improvement', type=int, help='Perform early stopping when the test loss does not improve for N epochs.', default=10)
+    parser.add_argument('--early_stopping', dest='early_stopping', type=int, help='Perform early stopping when the test loss does not improve for N epochs.', default=10)
     parser.add_argument('--use_augmentation', dest='use_augmentation', type=int,
                         help='whether to use data augmentation [0 = false, 1 = true]', default=1)
-
-
 
     args = parser.parse_args()
 
     batch_size = args.batch_size
-    test_every_n_steps = args.test_every_n_steps
     train_database_filepath = args.train_database_filepath
     test_database_filepath = args.test_database_filepath
     output_folder = args.output_folder
-    terminate_after_num_epochs_without_test_loss_improvement = args.terminate_after_num_epochs_without_test_loss_improvement
+    early_stopping = args.early_stopping
     learning_rate = args.learning_rate
     use_augmentation = args.use_augmentation
 
     print('Arguments:')
     print('batch_size = {}'.format(batch_size))
-    print('test_every_n_steps = {}'.format(test_every_n_steps))
     print('train_database_filepath = {}'.format(train_database_filepath))
     print('test_database_filepath = {}'.format(test_database_filepath))
     print('output folder = {}'.format(output_folder))
-    print('terminate_after_num_epochs_without_test_loss_improvement = {}'.format(terminate_after_num_epochs_without_test_loss_improvement))
+    print('early_stopping = {}'.format(early_stopping))
     print('learning_rate = {}'.format(learning_rate))
     print('use_augmentation = {}'.format(use_augmentation))
 
-    train_model(batch_size, test_every_n_steps, train_database_filepath, test_database_filepath, output_folder, terminate_after_num_epochs_without_test_loss_improvement, learning_rate, use_augmentation)
+    config = dict()
+    # config['ANCHORS'] = [[75, 75], [75, 75], [75, 75]]
+    config['anchors'] = [(32, 32), (128, 128), (256, 256)]
+    config['anchors_mask'] = [[0], [0], [0]]
+    config['batch_size'] = batch_size
+    config['learning_rate'] = learning_rate
+    config['train_lmdb_filepath'] = train_database_filepath
+    config['test_lmdb_filepath'] = test_database_filepath
+    config['augment'] = use_augmentation
+
+    train_model(config, output_folder, early_stopping)

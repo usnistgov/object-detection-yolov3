@@ -1,18 +1,8 @@
-# NIST-developed software is provided by NIST as a public service. You may use, copy and distribute copies of the software in any medium, provided that you keep intact this entire notice. You may improve, modify and create derivative works of the software or any portion of the software, and you may copy and distribute such modifications or works. Modified works should carry a notice stating that you changed the software and should note the date and nature of any such change. Please explicitly acknowledge the National Institute of Standards and Technology as the source of the software.
-
-# NIST-developed software is expressly provided "AS IS." NIST MAKES NO WARRANTY OF ANY KIND, EXPRESS, IMPLIED, IN FACT OR ARISING BY OPERATION OF LAW, INCLUDING, WITHOUT LIMITATION, THE IMPLIED WARRANTY OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT AND DATA ACCURACY. NIST NEITHER REPRESENTS NOR WARRANTS THAT THE OPERATION OF THE SOFTWARE WILL BE UNINTERRUPTED OR ERROR-FREE, OR THAT ANY DEFECTS WILL BE CORRECTED. NIST DOES NOT WARRANT OR MAKE ANY REPRESENTATIONS REGARDING THE USE OF THE SOFTWARE OR THE RESULTS THEREOF, INCLUDING BUT NOT LIMITED TO THE CORRECTNESS, ACCURACY, RELIABILITY, OR USEFULNESS OF THE SOFTWARE.
-
-# You are solely responsible for determining the appropriateness of using and distributing the software and you assume all risks associated with its use, including but not limited to the risks and costs of program errors, compliance with applicable laws, damage to or loss of data, programs or equipment, and the unavailability or interruption of operation. This software is not intended to be used in any situation where a failure could cause risk of injury or damage to property. The software developed by NIST employees is not subject to copyright protection within the United States.
-
 import sys
 if sys.version_info[0] < 3:
-    print('Python3 required')
-    sys.exit(1)
+    raise RuntimeError('Python3 required')
 
 import numpy as np
-import skimage
-import skimage.io
-import skimage.measure
 import os
 import csv
 
@@ -98,7 +88,7 @@ def load_boxes_to_ltrbc(filepath):
                 vec[3] = vec[1] + vec[3] - 1  # convert from height to y_end
                 A.append(vec)
 
-    A = np.asarray(A, dtype=np.float)
+    A = np.asarray(A, dtype=np.int32)
     return A
 
 
@@ -118,7 +108,7 @@ def load_boxes_to_xywhc(filepath):
                 vec.append(int(row['C']))
                 A.append(vec)
 
-    A = np.asarray(A, dtype=np.float)
+    A = np.asarray(A, dtype=np.int32)
     return A
 
 
@@ -237,7 +227,6 @@ def single_class_nms(boxes, scores, iou_threshold):
 
 def per_class_nms(boxes, objectness, class_probs, iou_threshold=0.3, score_threshold=0.1):
     # all boxes belong to the same image
-    # boxes are [x1, y1, x2, y2]
 
     num_classes = class_probs.shape[1]
     scores = class_probs * objectness  # create blend of objectness and probs
@@ -270,7 +259,6 @@ def per_class_nms(boxes, objectness, class_probs, iou_threshold=0.3, score_thres
 
 
 def filter_small_boxes(boxes, min_size):
-    # boxes is [x1, y1, x2, y2] i.e. [l, t, r, b]
     # filter out any boxes which have a width or height < 32 pixels
     w = boxes[:, 2] - boxes[:, 0]
     h = boxes[:, 3] - boxes[:, 1]
