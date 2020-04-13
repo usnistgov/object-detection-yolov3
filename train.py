@@ -17,6 +17,7 @@ import os
 import numpy as np
 import torch.utils.data
 import json
+import csv
 
 import yolo_dataset
 import model
@@ -66,11 +67,11 @@ def train_model(config, output_folder, early_stopping_count):
     use_gpu = torch.cuda.is_available()
     num_workers = 10 #int(config['batch_size'] / 2)
 
-    torch_mdoel_ofp = './checkpoint'
-    if os.path.exists(torch_mdoel_ofp):
+    torch_model_ofp = os.path.join(output_folder, 'checkpoint')
+    if os.path.exists(torch_model_ofp):
         import shutil
-        shutil.rmtree(torch_mdoel_ofp)
-    os.makedirs(torch_mdoel_ofp)
+        shutil.rmtree(torch_model_ofp)
+    os.makedirs(torch_model_ofp)
 
     pin_dataloader_memory = True
 
@@ -84,7 +85,7 @@ def train_model(config, output_folder, early_stopping_count):
     config['number_classes'] = train_dataset.get_number_classes()
     config['image_size'] = train_dataset.get_image_shape()
 
-    config_ofp = os.path.join(torch_mdoel_ofp, 'config.json')
+    config_ofp = os.path.join(torch_model_ofp, 'config.json')
     with open(config_ofp, 'w') as fp:
         json.dump(config, fp)
     yolo_model = model.YoloV3(config)
@@ -168,6 +169,12 @@ def train_model(config, output_folder, early_stopping_count):
 
         for key in loss_keys:
             plot(train_loss_dict[key], test_loss_dict[key], "{}_loss".format(key), output_folder)
+            with open(os.path.join(output_folder, 'train-{}.csv'.format(key)), 'w', newline='') as file:
+                writer = csv.writer(file)
+                writer.writerows(train_loss_dict[key])
+            with open(os.path.join(output_folder, 'test-{}.csv'.format(key)), 'w', newline='') as file:
+                writer = csv.writer(file)
+                writer.writerows(test_loss_dict[key])
 
         CONVERGENCE_TOLERANCE = 1e-4
         print('Best Current Epoch Selection:')
@@ -184,7 +191,7 @@ def train_model(config, output_folder, early_stopping_count):
             'epoch': epoch,
             'model_state_dict': yolo_model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict()
-        }, os.path.join(torch_mdoel_ofp, 'yolov3.ckpt'))
+        }, os.path.join(torch_model_ofp, 'yolov3.ckpt'))
 
         if len(test_loss) - best_epoch > early_stopping_count:
             break  # break the epoch loop
