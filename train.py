@@ -168,13 +168,15 @@ def train_model(config, output_folder, early_stopping_count):
             print('  loss {} = {}'.format(key, test_loss_dict[key][-1]))
 
         for key in loss_keys:
-            plot(train_loss_dict[key], test_loss_dict[key], "{}_loss".format(key), output_folder)
-            with open(os.path.join(output_folder, 'train-{}.csv'.format(key)), 'w', newline='') as file:
-                writer = csv.writer(file)
-                writer.writerows(train_loss_dict[key])
-            with open(os.path.join(output_folder, 'test-{}.csv'.format(key)), 'w', newline='') as file:
-                writer = csv.writer(file)
-                writer.writerows(test_loss_dict[key])
+            plot(train_loss_dict[key], test_loss_dict[key], "{}-loss".format(key), output_folder)
+            with open(os.path.join(output_folder, 'train-{}-loss.csv'.format(key)), 'w') as file:
+                val = train_loss_dict[key]
+                for i in range(len(val)):
+                    file.write('{}\n'.format(val[i]))
+            with open(os.path.join(output_folder, 'test-{}-loss.csv'.format(key)), 'w') as file:
+                val = test_loss_dict[key]
+                for i in range(len(val)):
+                    file.write('{}\n'.format(val[i]))
 
         CONVERGENCE_TOLERANCE = 1e-4
         print('Best Current Epoch Selection:')
