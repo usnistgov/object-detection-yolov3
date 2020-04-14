@@ -129,7 +129,7 @@ def train_model(config, output_folder, early_stopping_count):
             for l_idx in range(len(loss_keys)):
                 train_loss_dict[loss_keys[l_idx]].append(float(loss[0, l_idx].detach().cpu().numpy()))
             train_loss.append(train_loss_dict[loss_keys[0]])
-            print("batch {}/{} loss {}".format(i, len(train_loader), train_loss_dict[loss_keys[0]][-1]))
+            print("Epoch: {} Batch {}/{} loss {}".format(epoch, i, len(train_loader), train_loss_dict[loss_keys[0]][-1]))
 
             loss = loss[0, 0]
 
