@@ -130,6 +130,8 @@ def train_model(config, output_folder, early_stopping_count):
                 train_loss_dict[loss_keys[l_idx]].append(float(loss[0, l_idx].detach().cpu().numpy()))
             train_loss.append(train_loss_dict[loss_keys[0]])
             print("Epoch: {} Batch {}/{} loss {}".format(epoch, i, len(train_loader), train_loss_dict[loss_keys[0]][-1]))
+            if np.isnan(train_loss_dict[loss_keys[0]]):
+                raise RuntimeError("loss went to NaN")
 
             loss = loss[0, 0]
 
