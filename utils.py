@@ -106,6 +106,7 @@ def postprocess(prediction, num_classes, score_threshold=0.1, iou_threshold=0.3,
         scores = torch.sqrt(image_pred[:, 4] * class_prob)  # sqrt undoes the objectness * class prob effective squaring
         idx = (scores >= score_threshold).squeeze().nonzero()
         boxes = image_pred[idx, :4].squeeze()
+        class_pred = class_pred[idx].squeeze()
 
         # Iterate through all predicted classes
         unique_labels = class_pred.cpu().unique()
@@ -136,6 +137,7 @@ def postprocess(prediction, num_classes, score_threshold=0.1, iou_threshold=0.3,
             else:
                 output[i] = torch.cat((output[i], results))
 
+    # [x, y, w, h, score, pred_class]
     return output
 
 

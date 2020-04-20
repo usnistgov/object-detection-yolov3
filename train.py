@@ -11,8 +11,13 @@ import os
 # set the system environment so that the PCIe GPU ids match the Nvidia ids in nvidia-smi
 # os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 # gpus_to_use must bs comma separated list of gpu ids, e.g. "1,3,4"
-# os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,3,4"  # "0, 1" for multiple
 # os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # "0, 1" for multiple
+
+import os
+# set the system environment so that the PCIe GPU ids match the Nvidia ids in nvidia-smi
+os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+# gpus_to_use must bs comma separated list of gpu ids, e.g. "1,3,4"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # "0, 1" for multiple
 
 import numpy as np
 import torch.utils.data
@@ -242,8 +247,8 @@ if __name__ == "__main__":
     print('use_augmentation = {}'.format(use_augmentation))
 
     config = dict()
-    # config['ANCHORS'] = [[75, 75], [75, 75], [75, 75]]
-    config['anchors'] = [(32, 32), (128, 128), (256, 256)]
+    config['anchors'] = [[75, 75], [75, 75], [75, 75]]
+    # config['anchors'] = [(32, 32), (128, 128), (256, 256)]
     config['anchors_mask'] = [[0], [0], [0]]
     config['batch_size'] = batch_size
     config['learning_rate'] = learning_rate

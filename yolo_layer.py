@@ -23,15 +23,17 @@ class YOLOLayer(torch.nn.Module):
         """
 
         super(YOLOLayer, self).__init__()
+        strides = [32, 16, 8]  # fixed
         self.anchors = config_model['anchors']
         self.n_anchors = len(self.anchors)
         self.n_classes = config_model['number_classes']
         self.image_size = config_model['image_size']
         self.ignore_thres = ignore_thres
+        self.stride = strides[layer_nb]
         # self.l2_loss = torch.nn.MSELoss(size_average=False)
         # self.bce_loss = torch.nn.BCELoss(size_average=False)
         self.layer_nb = layer_nb
-        # self.stride = strides[layer_no]
+
         # self.all_anchors_grid = [(w / self.stride, h / self.stride)
         #                          for w, h in self.anchors]
         # self.masked_anchors = [self.all_anchors_grid[i]
@@ -51,8 +53,6 @@ class YOLOLayer(torch.nn.Module):
         grid_size = feature_map.shape[2:]
         n_ch = 5 + self.n_classes
         dtype = torch.cuda.FloatTensor if feature_map.is_cuda else torch.FloatTensor
-
-        stride = np.asarray(self.image_size[0], dtype=np.float32) // np.asarray(feature_map.shape[2], dtype=np.float32)
 
         # Convert feature_map to [N, H, W, C]
         feature_map = feature_map.permute(0, 2, 3, 1)
@@ -89,8 +89,8 @@ class YOLOLayer(torch.nn.Module):
         # box_xy = cell_size * sigmoid(xy) + cell_offset
         # box_xy = cell_size * sigmoid(xy) + cell_size * xy_offset
         # box_xy = cell_size * (sigmoid(xy) + xy_offset)
-        box_xy[..., 0] = (torch.sigmoid(box_xy[..., 0]) + x_offset) * stride
-        box_xy[..., 1] = (torch.sigmoid(box_xy[..., 1]) + y_offset) * stride
+        box_xy[..., 0] = (torch.sigmoid(box_xy[..., 0]) + x_offset) * self.stride
+        box_xy[..., 1] = (torch.sigmoid(box_xy[..., 1]) + y_offset) * self.stride
 
         anchors = np.array(self.anchors)
         w_anchors = dtype(np.broadcast_to(np.reshape(anchors[:, 0], (1, 1, 1, self.n_anchors)), feature_map.shape[:4]))
@@ -227,8 +227,6 @@ class YOLOLayer(torch.nn.Module):
         # labels is (B, K, 5); B = batch size; K = number boxes
         # last dimension of labels is [x, y, w, h, c] with (x, y) = top left; all in pixel coordinates
 
-        stride = np.asarray(self.image_size[0], dtype=np.float32) // np.asarray(feature_map.shape[2], dtype=np.float32)
-
         batch_gt_data = self.gt_boxes_to_feature_map(labels, grid_size)
         batch_gt_data = dtype(batch_gt_data)
         batch_gt_data = batch_gt_data.detach()
@@ -244,22 +242,37 @@ class YOLOLayer(torch.nn.Module):
 
         for b in range(batchsize):
             n = int(nlabel[b])
+
+            # if there are no boxes in the batch element
             if n == 0:
+                # ***************************************************
+                # Compute the Objectness Component of the Loss
+                # ***************************************************
+
+                objectness_logits = batch_objectness_logits[b, ...]
+                gt_data = batch_gt_data[b, ...]
+                gt_data = gt_data.detach()
+                # [batch_size, grid_size, grid_size, num_anchors, 1]
+                object_mask = gt_data[..., 4:5]  # this indicates where ground truth boxes exist, since not all cells have GT objects
+                object_mask = torch.autograd.Variable(object_mask.data)
+
+                objectness_loss = bce_criterion(objectness_logits, object_mask)
+                objectness_loss = torch.sum(objectness_loss)
+                batch_objectness_loss = batch_objectness_loss + objectness_loss
+
+                # class, xy, wh loss are not meaningful without ground truth boxes
                 continue
 
             # ***************************************************
             # Compute the Objectness Component of the Loss
             # ***************************************************
 
-            objectness_logits = batch_objectness_logits[b,...]
-            class_logits = batch_class_logits[b,...]
+            objectness_logits = batch_objectness_logits[b, ...]
             gt_data = batch_gt_data[b, ...]
             gt_data = gt_data.detach()
             # [batch_size, grid_size, grid_size, num_anchors, 1]
             object_mask = gt_data[..., 4:5]  # this indicates where ground truth boxes exist, since not all cells have GT objects
             object_mask = torch.autograd.Variable(object_mask.data)
-            class_targets = gt_data[..., 5:]
-            class_targets = torch.autograd.Variable(class_targets.data)
 
             # shape: [batch_size, grid_size, grid_size, num_anchors, 2]
             pred_box_xy = batch_pred_boxes[b, ..., 0:2]  # these are = [sigmoid(t_x) + c_x, sigmoid(t_y) + c_y]
@@ -304,10 +317,14 @@ class YOLOLayer(torch.nn.Module):
             objectness_loss = torch.sum(objectness_loss)
             batch_objectness_loss = batch_objectness_loss + objectness_loss
 
+
             # ***************************************************
             # Compute the Class Component of the Loss
             # ***************************************************
             # shape: [batch_size, grid_size, grid_size, num_anchors, 1]
+            class_logits = batch_class_logits[b, ...]
+            class_targets = gt_data[..., 5:]
+            class_targets = torch.autograd.Variable(class_targets.data)
             class_loss = object_mask * bce_criterion(class_logits, class_targets)
             class_loss = torch.sum(class_loss)
             batch_class_loss = batch_class_loss + class_loss
@@ -333,14 +350,14 @@ class YOLOLayer(torch.nn.Module):
 
             # stride multiple of xy_offset is factored out to avoid extra computation
             # this is sigmoid(t_x)
-            true_xy[..., 0] = (true_xy[..., 0] / stride) - x_offset[b, ...]
-            true_xy[..., 1] = (true_xy[..., 1] / stride) - y_offset[b, ...]
+            true_xy[..., 0] = (true_xy[..., 0] / self.stride) - x_offset[b, ...]
+            true_xy[..., 1] = (true_xy[..., 1] / self.stride) - y_offset[b, ...]
 
             # shape: [batch_size, grid_size, grid_size, num_anchors, 2]
             pred_xy = pred_boxes[..., 0:2]  # these are = [cell_size * sigmoid(t_x) + c_x, cell_size * sigmoid(t_y) + c_y]
             # invert box_xy = (tf.nn.sigmoid(box_xy) + xy_offset) * stride from reorg_layer
-            pred_xy[..., 0] = (pred_xy[..., 0] / stride) - x_offset[b, ...]  # stride multiple of xy_offset is factored out to avoid extra computation
-            pred_xy[..., 1] = (pred_xy[..., 1] / stride) - y_offset[b, ...]
+            pred_xy[..., 0] = (pred_xy[..., 0] / self.stride) - x_offset[b, ...]  # stride multiple of xy_offset is factored out to avoid extra computation
+            pred_xy[..., 1] = (pred_xy[..., 1] / self.stride) - y_offset[b, ...]
 
             # if you want to minimize (tx, ty) directly, uncomment this code. But loss based on (tx,ty) is much more unstable, and often goes to NaN. So using this requires care.
             # true_xy needs to be in (0, 1) non-inclusive in order to be within the valid output range of sigmoid
