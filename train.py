@@ -191,11 +191,13 @@ def train_model(config, output_folder, early_stopping_count):
         best_epoch = np.where(error_from_best == 0)[0][0]  # unpack numpy array, select first time since that value has happened
         print('Best epoch: {}'.format(best_epoch))
 
-        torch.save({
-            'epoch': epoch,
-            'model_state_dict': yolo_model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict()
-        }, os.path.join(torch_model_ofp, 'yolov3.ckpt'))
+        # determine if to record a new checkpoint based on best test loss
+        if (len(test_loss) - 1) == np.argmin(test_loss):
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': yolo_model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict()
+            }, os.path.join(torch_model_ofp, 'yolov3.ckpt'))
 
         if len(test_loss) - best_epoch > early_stopping_count:
             break  # break the epoch loop
