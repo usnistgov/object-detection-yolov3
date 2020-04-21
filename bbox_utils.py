@@ -13,6 +13,8 @@ def draw_boxes(img, boxes):
     if boxes is None:
         return img
 
+    # make a copy to modify
+    img = img.copy()
     for i in range(boxes.shape[0]):
         x_st = boxes[i, 0]
         y_st = boxes[i, 1]
@@ -205,6 +207,8 @@ def union_all_overlapping_bb(boxes, scores, minimum_iou_for_merge=0):
 
 
 def compute_iou(box, boxes, box_area=None, boxes_area=None):
+    if box.shape[0] == 0 or boxes.shape[0] == 0:
+        return np.zeros((0))
     # this is the iou of the box against all other boxes
     x_left = np.maximum(box[0], boxes[:, 0])
     y_top = np.maximum(box[1], boxes[:, 1])

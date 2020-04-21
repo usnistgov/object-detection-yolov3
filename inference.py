@@ -21,6 +21,7 @@ import bbox_utils
 
 EDGE_EFFECT_RANGE = 96
 TILE_SIZE = 2048
+SAVE_IMG_WITH_BOXES_DRAWN = False
 
 
 def convert_image_to_tiles(img):
@@ -93,14 +94,14 @@ def convert_image_to_tiles(img):
 def inference_image_tiled(yolo_model, img, min_box_size):
     height, width, channels = img.shape
     with torch.no_grad():
-        print('converting image into tensors')
+        print('  converting image into tensors')
         tiles, tile_x_location, tile_y_location = convert_image_to_tiles(img)
 
         boxes_list = []
 
         # iterate over the data to be inference'd
         for i in range(len(tiles)):
-            print('tile {}/{}'.format(i, len(tiles)))
+            # print('tile {}/{}'.format(i, len(tiles)))
             batch_data = tiles[i].astype(np.float32)
             batch_tile_x_location = tile_x_location[i]
             batch_tile_y_location = tile_y_location[i]
@@ -283,8 +284,7 @@ def inference_image_folder(image_folder, image_format, checkpoint_filepath, outp
         img = skimage.io.imread(img_filepath)
         if len(img.shape) == 2:
             img = np.expand_dims(img, -1)
-        img = img[0:4096, 0:4096, :]
-        orig_img = img.copy()
+
         print('  img.shape={}'.format(img.shape))
         height, width, channels = img.shape
 
@@ -293,15 +293,16 @@ def inference_image_folder(image_folder, image_format, checkpoint_filepath, outp
         else:
             predictions = inference_image(yolo_model, img, min_box_size)
 
-        # predictions = [x1, y1, x2, y2, score, pred_class]
-        boxes = predictions[:, 0:4]
-        boxes = np.round(boxes)
+        if SAVE_IMG_WITH_BOXES_DRAWN:
+            # predictions = [x1, y1, x2, y2, score, pred_class]
+            boxes = predictions[:, 0:4]
+            boxes = np.round(boxes)
 
-        # draw boxes on the images and save
-        # convert boxes to [x, y, w, h]
-        boxes[:, 2] = boxes[:, 2] - boxes[:, 0]
-        boxes[:, 3] = boxes[:, 3] - boxes[:, 1]
-        skimage.io.imsave(os.path.join(output_folder, file_name), bbox_utils.draw_boxes(orig_img, boxes))
+            # draw boxes on the images and save
+            # convert boxes to [x, y, w, h]
+            boxes[:, 2] = boxes[:, 2] - boxes[:, 0]
+            boxes[:, 3] = boxes[:, 3] - boxes[:, 1]
+            skimage.io.imsave(os.path.join(output_folder, file_name), bbox_utils.draw_boxes(img, boxes))
 
         # write merged rois
         print('Found: {} rois'.format(predictions.shape[0]))
