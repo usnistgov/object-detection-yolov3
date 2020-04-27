@@ -210,15 +210,6 @@ class YOLOLayer(torch.nn.Module):
             predictions = predictions.view(batchsize, -1, n_ch)
             return predictions
 
-
-
-        # Convert feature_map to [N, H, W, C]
-        feature_map = feature_map.permute(0, 2, 3, 1)
-        # expand out channels dimension
-        feature_map = feature_map.view(batchsize, grid_size[0], grid_size[1], self.n_anchors, n_ch)
-
-        # labels = labels.cpu()
-        # feature_map = feature_map.cpu()
         if torch.cuda.is_available():
             dtype = torch.cuda.FloatTensor
         else:

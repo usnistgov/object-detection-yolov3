@@ -89,6 +89,7 @@ def train_model(config, output_folder, early_stopping_count):
 
     config['number_classes'] = train_dataset.get_number_classes()
     config['image_size'] = train_dataset.get_image_shape()
+    config['weight_decay'] = 5e-4
 
     config_ofp = os.path.join(torch_model_ofp, 'config.json')
     with open(config_ofp, 'w') as fp:
@@ -99,7 +100,7 @@ def train_model(config, output_folder, early_stopping_count):
         # move model to GPU
         yolo_model = yolo_model.cuda()
 
-    optimizer = torch.optim.Adam(yolo_model.parameters(), lr=config['learning_rate'])
+    optimizer = torch.optim.Adam(yolo_model.parameters(), lr=config['learning_rate'], weight_decay=config['weight_decay'])
 
     loss_keys = ['total', 'xy', 'wh', 'obj', 'cls']
     train_loss = list()
