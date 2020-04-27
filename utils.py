@@ -81,16 +81,6 @@ def postprocess(prediction, num_classes, score_threshold=0.1, iou_threshold=0.3,
 
     output = [None for _ in range(len(prediction))]
     for i, image_pred in enumerate(prediction):
-        # Filter out confidence scores below threshold
-        class_prob, _ = torch.max(image_pred[:, 5:5 + num_classes], dim=1)
-        scores = torch.sqrt(image_pred[:, 4] * class_prob)  # sqrt undoes the objectness * class prob effective squaring
-        conf_mask = (scores >= score_threshold).squeeze()
-        image_pred = image_pred[conf_mask]
-
-        # If none are remaining => process next image
-        if not image_pred.size(0):
-            continue
-
         # remove detections smaller than min box size
         w = image_pred[..., 2]
         h = image_pred[..., 3]
@@ -105,7 +95,13 @@ def postprocess(prediction, num_classes, score_threshold=0.1, iou_threshold=0.3,
         class_prob, class_pred = torch.max(image_pred[:, 5:5 + num_classes], dim=1)
         scores = torch.sqrt(image_pred[:, 4] * class_prob)  # sqrt undoes the objectness * class prob effective squaring
         idx = (scores >= score_threshold).squeeze().nonzero()
+
+        # If none are remaining => process next image
+        if not idx.size(0):
+            continue
+
         boxes = image_pred[idx, :4].squeeze()
+        scores = scores[idx].squeeze()
         class_pred = class_pred[idx].squeeze()
 
         # Iterate through all predicted classes
