@@ -2,53 +2,44 @@ import torch
 import numpy as np
 
 
-def nms(bbox, thresh, score=None, limit=None):
-    """Suppress bounding boxes according to their IoUs and confidence scores.
-    Args:
-        bbox (array): Bounding boxes to be transformed. The shape is
-            :math:`(R, 4)`. :math:`R` is the number of bounding boxes.
-        thresh (float): Threshold of IoUs.
-        score (array): An array of confidences whose shape is :math:`(R,)`.
-        limit (int): The upper bound of the number of the output bounding
-            boxes. If it is not specified, this method selects as many
-            bounding boxes as possible.
-    Returns:
-        array:
-        An array with indices of bounding boxes that are selected. \
-        They are sorted by the scores of bounding boxes in descending \
-        order. \
-        The shape of this array is :math:`(K,)` and its dtype is\
-        :obj:`numpy.int32`. Note that :math:`K \\leq R`.
+def compute_iou(box, boxes, box_area=None, boxes_area=None):
+    # this is the iou of the box against all other boxes
+    x_left = np.maximum(box[0], boxes[:, 0])
+    y_top = np.maximum(box[1], boxes[:, 1])
+    x_right = np.minimum(box[2], boxes[:, 2])
+    y_bottom = np.minimum(box[3], boxes[:, 3])
 
-    from: https://github.com/chainer/chainercv
-    """
+    intersections = np.maximum(y_bottom - y_top, 0) * np.maximum(x_right - x_left, 0)
+    if box_area is None:
+        box_area = (box[2] - box[0]) * (box[3] - box[1])
+    if boxes_area is None:
+        boxes_area = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+    unions = box_area + boxes_area - intersections
+    ious = intersections / unions
+    return ious
 
-    if len(bbox) == 0:
-        return np.zeros((0,), dtype=np.int32)
 
-    if score is not None:
-        order = score.argsort()[::-1]
-        bbox = bbox[order]
-    bbox_area = np.prod(bbox[:, 2:] - bbox[:, :2], axis=1)
+def single_class_nms(boxes, scores, iou_threshold):
+    x1 = boxes[:, 0]
+    y1 = boxes[:, 1]
+    x2 = boxes[:, 2]
+    y2 = boxes[:, 3]
 
-    selec = np.zeros(bbox.shape[0], dtype=bool)
-    for i, b in enumerate(bbox):
-        tl = np.maximum(b[:2], bbox[selec, :2])
-        br = np.minimum(b[2:], bbox[selec, 2:])
-        area = np.prod(br - tl, axis=1) * (tl < br).all(axis=1)
+    areas = (x2 - x1) * (y2 - y1)
+    order = scores.argsort()[::-1]
 
-        iou = area / (bbox_area[i] + bbox_area[selec] - area)
-        if (iou >= thresh).any():
-            continue
+    keep = []
+    while order.size > 0:
+        i = order[0]
+        keep.append(i)
+        order = order[1:]
 
-        selec[i] = True
-        if limit is not None and np.count_nonzero(selec) >= limit:
-            break
+        iou = compute_iou(boxes[i, :], boxes[order, :], areas[i], areas[order])
 
-    selec = np.where(selec)[0]
-    if score is not None:
-        selec = order[selec]
-    return selec.astype(np.int32)
+        inds = np.where(iou <= iou_threshold)[0]
+        order = order[inds]
+
+    return keep
 
 
 def postprocess(prediction, num_classes, score_threshold=0.1, iou_threshold=0.3, min_box_size=12):
@@ -123,7 +114,7 @@ def postprocess(prediction, num_classes, score_threshold=0.1, iou_threshold=0.3,
 
             nms_in = boxes_xyxy.cpu().numpy()
             nms_scores = scores_class.cpu().numpy()
-            nms_out_index = nms(nms_in[:, :4], iou_threshold, score=nms_scores)
+            nms_out_index = single_class_nms(nms_in[:, :4], nms_scores, iou_threshold)
             boxes_class = boxes_class[nms_out_index, :]
             scores_class = scores_class[nms_out_index].to(torch.float32).reshape(-1, 1)
             pred_class = pred_class[nms_out_index].to(torch.float32).reshape(-1, 1)
@@ -171,190 +162,4 @@ def bboxes_iou_xywh_broadcast(true_boxes, pred_boxes):
     # [grid_size, grid_size, num_anchors, V]
     iou = intersect_area / (pred_box_area + true_box_area - intersect_area)
     return iou
-
-
-def bboxes_iou_xywh(bboxes_a, bboxes_b):
-    """Calculate the Intersection of Unions (IoUs) between bounding boxes.
-    IoU is calculated as a ratio of area of the intersection
-    and area of the union.
-
-    Args:
-        bbox_a (array): An array whose shape is :math:`(N, 4)`.
-            :math:`N` is the number of bounding boxes.
-            The dtype should be :obj:`numpy.float32`.
-        bbox_b (array): An array similar to :obj:`bbox_a`,
-            whose shape is :math:`(K, 4)`.
-            The dtype should be :obj:`numpy.float32`.
-    Returns:
-        array:
-        An array whose shape is :math:`(N, K)`. \
-        An element at index :math:`(n, k)` contains IoUs between \
-        :math:`n` th bounding box in :obj:`bbox_a` and :math:`k` th bounding \
-        box in :obj:`bbox_b`.
-
-    from: https://github.com/chainer/chainercv
-    """
-    if bboxes_a.shape[1] != 4 or bboxes_b.shape[1] != 4:
-        raise IndexError
-
-    # top left
-    tl = torch.max((bboxes_a[:, None, :2] - bboxes_a[:, None, 2:] / 2),
-                    (bboxes_b[:, :2] - bboxes_b[:, 2:] / 2))
-    # bottom right
-    br = torch.min((bboxes_a[:, None, :2] + bboxes_a[:, None, 2:] / 2),
-                    (bboxes_b[:, :2] + bboxes_b[:, 2:] / 2))
-
-    area_a = torch.prod(bboxes_a[:, 2:], 1)
-    area_b = torch.prod(bboxes_b[:, 2:], 1)
-
-    en = (tl < br).type(tl.type()).prod(dim=2)
-    area_i = torch.prod(br - tl, 2) * en  # * ((tl < br).all())
-    return area_i / (area_a[:, None] + area_b - area_i)
-
-
-def bboxes_iou_xyxy(bboxes_a, bboxes_b):
-    """Calculate the Intersection of Unions (IoUs) between bounding boxes.
-    IoU is calculated as a ratio of area of the intersection
-    and area of the union.
-
-    Args:
-        bbox_a (array): An array whose shape is :math:`(N, 4)`.
-            :math:`N` is the number of bounding boxes.
-            The dtype should be :obj:`numpy.float32`.
-        bbox_b (array): An array similar to :obj:`bbox_a`,
-            whose shape is :math:`(K, 4)`.
-            The dtype should be :obj:`numpy.float32`.
-    Returns:
-        array:
-        An array whose shape is :math:`(N, K)`. \
-        An element at index :math:`(n, k)` contains IoUs between \
-        :math:`n` th bounding box in :obj:`bbox_a` and :math:`k` th bounding \
-        box in :obj:`bbox_b`.
-
-    from: https://github.com/chainer/chainercv
-    """
-    if bboxes_a.shape[1] != 4 or bboxes_b.shape[1] != 4:
-        raise IndexError
-
-    # top left
-    tl = torch.max(bboxes_a[:, None, :2], bboxes_b[:, :2])
-    # bottom right
-    br = torch.min(bboxes_a[:, None, 2:], bboxes_b[:, 2:])
-    area_a = torch.prod(bboxes_a[:, 2:] - bboxes_a[:, :2], 1)
-    area_b = torch.prod(bboxes_b[:, 2:] - bboxes_b[:, :2], 1)
-
-    en = (tl < br).type(tl.type()).prod(dim=2)
-    area_i = torch.prod(br - tl, 2) * en  # * ((tl < br).all())
-    return area_i / (area_a[:, None] + area_b - area_i)
-
-
-# def bboxes_iou(bboxes_a, bboxes_b, xyxy=True):
-#     """Calculate the Intersection of Unions (IoUs) between bounding boxes.
-#     IoU is calculated as a ratio of area of the intersection
-#     and area of the union.
-#
-#     Args:
-#         bbox_a (array): An array whose shape is :math:`(N, 4)`.
-#             :math:`N` is the number of bounding boxes.
-#             The dtype should be :obj:`numpy.float32`.
-#         bbox_b (array): An array similar to :obj:`bbox_a`,
-#             whose shape is :math:`(K, 4)`.
-#             The dtype should be :obj:`numpy.float32`.
-#     Returns:
-#         array:
-#         An array whose shape is :math:`(N, K)`. \
-#         An element at index :math:`(n, k)` contains IoUs between \
-#         :math:`n` th bounding box in :obj:`bbox_a` and :math:`k` th bounding \
-#         box in :obj:`bbox_b`.
-#
-#     from: https://github.com/chainer/chainercv
-#     """
-#     if bboxes_a.shape[1] != 4 or bboxes_b.shape[1] != 4:
-#         raise IndexError
-#
-#     # top left
-#     if xyxy:
-#         tl = torch.max(bboxes_a[:, None, :2], bboxes_b[:, :2])
-#         # bottom right
-#         br = torch.min(bboxes_a[:, None, 2:], bboxes_b[:, 2:])
-#         area_a = torch.prod(bboxes_a[:, 2:] - bboxes_a[:, :2], 1)
-#         area_b = torch.prod(bboxes_b[:, 2:] - bboxes_b[:, :2], 1)
-#     else:
-#         tl = torch.max((bboxes_a[:, None, :2] - bboxes_a[:, None, 2:] / 2),
-#                         (bboxes_b[:, :2] - bboxes_b[:, 2:] / 2))
-#         # bottom right
-#         br = torch.min((bboxes_a[:, None, :2] + bboxes_a[:, None, 2:] / 2),
-#                         (bboxes_b[:, :2] + bboxes_b[:, 2:] / 2))
-#
-#         area_a = torch.prod(bboxes_a[:, 2:], 1)
-#         area_b = torch.prod(bboxes_b[:, 2:], 1)
-#     en = (tl < br).type(tl.type()).prod(dim=2)
-#     area_i = torch.prod(br - tl, 2) * en  # * ((tl < br).all())
-#     return area_i / (area_a[:, None] + area_b - area_i)
-
-#
-# def label2yolobox(labels, info_img, maxsize, lrflip):
-#     """
-#     Transform coco labels to yolo box labels
-#     Args:
-#         labels (numpy.ndarray): label data whose shape is :math:`(N, 5)`.
-#             Each label consists of [class, x, y, w, h] where \
-#                 class (float): class index.
-#                 x, y, w, h (float) : coordinates of \
-#                     left-top points, width, and height of a bounding box.
-#                     Values range from 0 to width or height of the image.
-#         info_img : tuple of h, w, nh, nw, dx, dy.
-#             h, w (int): original shape of the image
-#             nh, nw (int): shape of the resized image without padding
-#             dx, dy (int): pad size
-#         maxsize (int): target image size after pre-processing
-#         lrflip (bool): horizontal flip flag
-#
-#     Returns:
-#         labels:label data whose size is :math:`(N, 5)`.
-#             Each label consists of [class, xc, yc, w, h] where
-#                 class (float): class index.
-#                 xc, yc (float) : center of bbox whose values range from 0 to 1.
-#                 w, h (float) : size of bbox whose values range from 0 to 1.
-#     """
-#     h, w, nh, nw, dx, dy = info_img
-#     x1 = labels[:, 1] / w
-#     y1 = labels[:, 2] / h
-#     x2 = (labels[:, 1] + labels[:, 3]) / w
-#     y2 = (labels[:, 2] + labels[:, 4]) / h
-#     labels[:, 1] = (((x1 + x2) / 2) * nw + dx) / maxsize
-#     labels[:, 2] = (((y1 + y2) / 2) * nh + dy) / maxsize
-#     labels[:, 3] *= nw / w / maxsize
-#     labels[:, 4] *= nh / h / maxsize
-#     if lrflip:
-#         labels[:, 1] = 1 - labels[:, 1]
-#     return labels
-#
-#
-# def yolobox2label(box, info_img):
-#     """
-#     Transform yolo box labels to yxyx box labels.
-#     Args:
-#         box (list): box data with the format of [yc, xc, w, h]
-#             in the coordinate system after pre-processing.
-#         info_img : tuple of h, w, nh, nw, dx, dy.
-#             h, w (int): original shape of the image
-#             nh, nw (int): shape of the resized image without padding
-#             dx, dy (int): pad size
-#     Returns:
-#         label (list): box data with the format of [y1, x1, y2, x2]
-#             in the coordinate system of the input image.
-#     """
-#     h, w, nh, nw, dx, dy = info_img
-#     y1, x1, y2, x2 = box
-#     box_h = ((y2 - y1) / nh) * h
-#     box_w = ((x2 - x1) / nw) * w
-#     y1 = ((y1 - dy) / nh) * h
-#     x1 = ((x1 - dx) / nw) * w
-#     label = [y1, x1, y1 + box_h, x1 + box_w]
-#     return label
-
-
-
-
 
