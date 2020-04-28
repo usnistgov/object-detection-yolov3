@@ -132,7 +132,7 @@ class YOLOLayer(torch.nn.Module):
             # move box x,y to middle from upper left
             box_xy = np.floor(box_xy + ((box_wh - 1) / 2.0))
             boxes[:, 0:2] = box_xy
-            # boxes i s[x, y, w, h] where (x, y) is the center of the box
+            # boxes is [x, y, w, h] where (x, y) is the center of the box
 
             anchors_max = anchors / 2.0
             anchors_min = -anchors_max
@@ -303,11 +303,11 @@ class YOLOLayer(torch.nn.Module):
             # elements that are not 1.0 in objectness_pos_mask and 0.0 objectness_neg_mask do not contribute to the loss
             # Yolov3 Paper page 1-2 "If the bounding box prior is not the best but does overlap a ground truth object by more than some threshold we ignore the prediction. We use the threshold of 0.5.
 
-            objectness_valid_mask = objectness_valid_mask.detach()
+            objectness_valid_mask = torch.autograd.Variable(objectness_valid_mask.data)
+
             objectness_loss = objectness_valid_mask * bce_criterion(objectness_logits, object_mask)
             objectness_loss = torch.sum(objectness_loss)
             batch_objectness_loss = batch_objectness_loss + objectness_loss
-
 
             # ***************************************************
             # Compute the Class Component of the Loss
@@ -372,8 +372,8 @@ class YOLOLayer(torch.nn.Module):
             true_tw_th = torch.clamp(true_tw_th, 1e-9, 1e9)
             pred_tw_th = torch.clamp(pred_tw_th, 1e-9, 1e9)
 
-            true_tw_th.requires_grad = False
-            true_xy.requires_grad = False
+            true_tw_th = torch.autograd.Variable(true_tw_th.data)
+            true_xy = torch.autograd.Variable(true_xy.data)
 
             # shape: [batch_size, grid_size, grid_size, num_anchors, 1]
             diff = true_xy - pred_xy
