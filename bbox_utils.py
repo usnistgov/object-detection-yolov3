@@ -110,6 +110,7 @@ def load_boxes_to_ltrbc(filepath):
                 A.append(vec)
 
     A = np.asarray(A, dtype=np.int32)
+    A = A.reshape(-1, 5)
     return A
 
 
@@ -130,6 +131,7 @@ def load_boxes_to_xywhc(filepath):
                 A.append(vec)
 
     A = np.asarray(A, dtype=np.int32)
+    A = A.reshape(-1, 5)
     return A
 
 
