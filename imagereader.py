@@ -106,6 +106,26 @@ class ImageReader:
         datum = ImageYoloBoxesPair()
         print('Initializing image database')
         with self.lmdb_env.begin(write=False) as lmdb_txn:
+
+            # first pass to determine class count and whether or not there are images without a class
+            empty_images_flag = False
+            highest_class_nb = 0
+            cursor = lmdb_txn.cursor().iternext(keys=True, values=False)
+            for key in cursor:
+                present_classes_str = key.decode('ascii').split(':')[1]
+                present_classes_str = present_classes_str.split(',')
+                for k in present_classes_str:
+                    if len(k) == 0:
+                        empty_images_flag = True
+                    else:
+                        highest_class_nb = max(highest_class_nb, int(k))
+            for i in range(highest_class_nb):
+                self.keys.append(list())
+            if empty_images_flag:
+                self.keys.append(list())
+
+            # second pass to populate the database
+            # get a new cursor to the start of the database
             cursor = lmdb_txn.cursor().iternext(keys=True, values=False)
             for key in cursor:
                 self.keys_flat.append(key)
@@ -113,9 +133,14 @@ class ImageReader:
                 present_classes_str = key.decode('ascii').split(':')[1]
                 present_classes_str = present_classes_str.split(',')
                 for k in present_classes_str:
-                    k = int(k)
-                    while len(self.keys) <= k:
-                        self.keys.append(list())
+                    if len(k) == 0:
+                        assert empty_images_flag
+                        k = int(0)
+                    else:
+                        if empty_images_flag:
+                            k = int(k) + 1
+                        else:
+                            k = int(k)
                     self.keys[k].append(key)
 
             # extract the serialized image from the database
@@ -131,8 +156,13 @@ class ImageReader:
         print('Dataset has {} examples'.format(len(self.keys_flat)))
         if self.balance_classes:
             print('Dataset Example Count by Class:')
-            for i in range(len(self.keys)):
-                print('  class: {} count: {}'.format(i, len(self.keys[i])))
+            if empty_images_flag:
+                print('  class: <empty> count: {}'.format(len(self.keys[0])))
+                for i in range(1, len(self.keys)):
+                    print('  class: {} count: {}'.format(i-1, len(self.keys[i])))
+            else:
+                for i in range(len(self.keys)):
+                    print('  class: {} count: {}'.format(i, len(self.keys[i])))
 
         self.nb_workers = num_workers
         self.maxOutQSize = num_workers * 10
