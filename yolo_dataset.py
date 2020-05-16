@@ -31,7 +31,6 @@ class YoloDataset(torch.utils.data.Dataset):
         # get a list of keys from the lmdb
         self.keys_flat = list()
         self.keys = list()
-        self.keys.append(list())  # there will always be at least one class
 
         self.lmdb_env = lmdb.open(self.lmdb_filepath, map_size=int(3e10), readonly=True)  # 1e10 is 10 GB
 
@@ -41,17 +40,45 @@ class YoloDataset(torch.utils.data.Dataset):
         print('Initializing image database')
 
         with self.lmdb_env.begin(write=False) as lmdb_txn:
+            # first pass to determine class count and whether or not there are images without a class
+            empty_images_flag = False
+            highest_class_nb = 0
+            cursor = lmdb_txn.cursor().iternext(keys=True, values=False)
+            for key in cursor:
+                present_classes_str = key.decode('ascii').split(':')[1]
+                present_classes_str = present_classes_str.split(',')
+                for k in present_classes_str:
+                    if len(k) == 0:
+                        empty_images_flag = True
+                    else:
+                        highest_class_nb = max(highest_class_nb, int(k))
+            for i in range(highest_class_nb):
+                self.keys.append(list())
+            if empty_images_flag:
+                self.keys.append(list())
+
+            # second pass to populate the database
+            # get a new cursor to the start of the database
             cursor = lmdb_txn.cursor().iternext(keys=True, values=False)
             for key in cursor:
                 self.keys_flat.append(key)
 
                 present_classes_str = key.decode('ascii').split(':')[1]
-                present_classes_str_flat.append(present_classes_str)
-                present_classes_str = present_classes_str.split(',')
-                for k in present_classes_str:
+                present_classes_str_split = present_classes_str.split(',')
+                # TODO test this code, its an untested port of similar functionality for empty class balancing from the tensorflow imagereader.
+                if len(present_classes_str_split) == 0:
+                    present_classes_str = "0"
+                    present_classes_str_split = present_classes_str.split(',')
+                    present_classes_str_flat.append(present_classes_str)
+                else:
+                    if empty_images_flag:
+                        present_classes_str_split = [str(int(k) + 1) for k in present_classes_str_split]
+                        present_classes_str = ','.join(present_classes_str_split)
+                        present_classes_str_flat.append(present_classes_str)
+                    else:
+                        present_classes_str_flat.append(present_classes_str)
+                for k in present_classes_str_split:
                     k = int(k)
-                    while len(self.keys) <= k:
-                        self.keys.append(list())
                     self.keys[k].append(key)
 
             # extract the serialized image from the database
@@ -68,7 +95,13 @@ class YoloDataset(torch.utils.data.Dataset):
         print('Dataset Example Count by Class:')
         class_count = list()
         for i in range(len(self.keys)):
-            print('  class: {} count: {}'.format(i, len(self.keys[i])))
+            if empty_images_flag:
+                if i == 0:
+                    print('  class: <empty> count: {}'.format(i, len(self.keys[i])))
+                else:
+                    print('  class: {} count: {}'.format(i-1, len(self.keys[i])))
+            else:
+                print('  class: {} count: {}'.format(i, len(self.keys[i])))
             class_count.append(len(self.keys[i]))
 
         # setup sampler for weighting samples to balance classes
@@ -78,10 +111,6 @@ class YoloDataset(torch.utils.data.Dataset):
         self.class_weights = np.zeros((len(class_count)))
         for i in range(len(class_count)):
             self.class_weights[i] = 1.0 - (float(class_count[i]) / float(class_instance_count))
-
-        # debug item to ensure each image has a box
-        # self.class_weights[0] = 0.0
-        # self.class_weights[1] = 1.0
 
         self.weights = np.zeros((len(self.keys_flat)))
         for i in range(len(self.keys_flat)):
