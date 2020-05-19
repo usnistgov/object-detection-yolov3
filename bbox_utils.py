@@ -280,3 +280,21 @@ def filter_small_boxes(boxes, min_size):
     boxes = boxes[idx, :]
     return boxes
 
+
+def write_boxes_from_ltrbpc(boxes, csv_filename):
+
+    # write the header to a new file
+    with open(csv_filename, 'w') as fh:
+        fh.write('X,Y,W,H,P,C\n')
+
+        # loop over the selected stars saving them as tiffs thumbnails
+        for k in range(boxes.shape[0]):
+            # get the current annotation location
+            x = int(boxes[k, 0])
+            y = int(boxes[k, 1])
+            w = int(boxes[k, 2] - x + 1)
+            h = int(boxes[k, 3] - y + 1)
+            p = boxes[k, 4]
+            c = int(boxes[k, 5])
+            # output the position to a csv file
+            fh.write('{:d},{:d},{:d},{:d},{:f},{:d}\n'.format(x, y, w, h, p, c))
