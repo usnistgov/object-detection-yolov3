@@ -29,7 +29,8 @@ def train_model(batch_size, test_every_n_steps, train_database_filepath, test_da
     if not os.path.exists(output_folder):
         os.makedirs(output_folder)
 
-    anchors = [(32, 32), (128, 128), (256, 256)]
+    # anchors = [(32, 32), (128, 128), (256, 256)]
+    anchors = [(64, 384), (384, 64)]
 
     training_checkpoint_filepath = None
 

@@ -10,6 +10,11 @@ if int(tf_version[0]) != 2:
 
 import argparse
 import os
+# set the system environment so that the PCIe GPU ids match the Nvidia ids in nvidia-smi
+os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+# gpus_to_use must bs comma separated list of gpu ids, e.g. "1,3,4"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # "0, 1" for multiple
+
 import numpy as np
 import skimage.io
 
@@ -30,11 +35,17 @@ def convert_image_to_tiles(img, tile_size):
     tile_list = list()
     tile_x_location = list()
     tile_y_location = list()
-    radius = EDGE_EFFECT_RANGE
+    radius = [EDGE_EFFECT_RANGE, EDGE_EFFECT_RANGE]
     assert tile_size[0] % model.YoloV3.NETWORK_DOWNSAMPLE_FACTOR == 0
     assert tile_size[1] % model.YoloV3.NETWORK_DOWNSAMPLE_FACTOR == 0
-    zone_of_responsibility_size = [tile_size[0] - 2 * radius, tile_size[1] - 2 * radius]
-    assert radius % model.YoloV3.NETWORK_DOWNSAMPLE_FACTOR == 0
+    if tile_size[0] >= height:
+        radius[0] = 0
+    if tile_size[1] >= width:
+        radius[1] = 0
+    zone_of_responsibility_size = [tile_size[0] - 2 * radius[0], tile_size[1] - 2 * radius[1]]
+
+    assert radius[0] % model.YoloV3.NETWORK_DOWNSAMPLE_FACTOR == 0
+    assert radius[1] % model.YoloV3.NETWORK_DOWNSAMPLE_FACTOR == 0
 
     # loop over the input image cropping out (tile_size x tile_size) tiles
     for i in range(0, height, zone_of_responsibility_size[0]):
@@ -42,14 +53,14 @@ def convert_image_to_tiles(img, tile_size):
             # create a bounding box
             x_st_z = j
             y_st_z = i
-            x_end_z = x_st_z + zone_of_responsibility_size[0]
-            y_end_z = y_st_z + zone_of_responsibility_size[1]
+            x_end_z = x_st_z + zone_of_responsibility_size[1]
+            y_end_z = y_st_z + zone_of_responsibility_size[0]
 
             # pad zone of responsibility by radius
-            x_st = x_st_z - radius
-            y_st = y_st_z - radius
-            x_end = x_end_z + radius
-            y_end = y_end_z + radius
+            x_st = x_st_z - radius[1]
+            y_st = y_st_z - radius[0]
+            x_end = x_end_z + radius[1]
+            y_end = y_end_z + radius[0]
 
             pre_pad_x = 0
             if x_st < 0:
@@ -76,7 +87,7 @@ def convert_image_to_tiles(img, tile_size):
 
             if pre_pad_x > 0 or post_pad_x > 0 or pre_pad_y > 0 or post_pad_y > 0:
                 # ensure its correct size (if tile exists at the edge of the image
-                tile = np.pad(tile, pad_width=((pre_pad_y, post_pad_y), (pre_pad_x, post_pad_x)), mode='reflect')
+                tile = np.pad(tile, pad_width=((pre_pad_y, post_pad_y), (pre_pad_x, post_pad_x), (0, 0)), mode='reflect')
 
             # append this tiles locations to the list
             tile_x_location.append(x_st)
@@ -170,96 +181,6 @@ def filter_small_boxes(boxes, min_roi_size):
     return boxes
 
 
-def inference_image(yolo_model, img, min_roi_size):
-
-    print('reading image')
-    img_size = img.shape
-
-    batch_data = img.astype(np.float32)
-    batch_data = batch_data.reshape((1, 1, img_size[0], img_size[1]))
-
-    # normalize with whole image stats
-    batch_data = imagereader.zscore_normalize(batch_data)
-
-    feature_maps = yolo_model(batch_data, training=False)
-    boxes = model.YoloV3.convert_feature_map_to_inference_detections(feature_maps, [img_size[0], img_size[1]])
-
-    # strip out batch_size which is fixed at one
-    boxes = np.array(boxes)
-    boxes = boxes[0,]
-
-    boxes = filter_small_boxes(boxes, min_roi_size)
-
-    objectness = boxes[:, 4:5]
-    class_probs = boxes[:, 5:]
-    boxes = boxes[:, 0:4]
-
-    # nms boxes per tile being passed through the network
-    boxes, scores, class_label = per_class_nms(boxes, objectness, class_probs)
-
-    if boxes is not None:
-        # reshape to match boxes[N, 1]
-        scores = scores.reshape((-1, 1))
-        class_label = class_label.reshape((-1, 1))
-
-        # # remove boxes whose centers are in the EDGE_EFFECT ghost region
-        # invalid_idx = np.zeros((boxes.shape[0]), dtype=np.bool)
-        # center_xs = (boxes[:, 2] + boxes[:, 0]) / 2.0
-        # center_ys = (boxes[:, 3] + boxes[:, 1]) / 2.0
-        # for b in range(len(center_xs)):
-        #     cx = center_xs[b]
-        #     cy = center_ys[b]
-        #     # handle which boundaries
-        #     if cy < EDGE_EFFECT_RANGE:
-        #         invalid_idx[b] = 1
-        #     if cy >= img_size[0] - EDGE_EFFECT_RANGE:
-        #         invalid_idx[b] = 1
-        #     if cx < EDGE_EFFECT_RANGE:
-        #         invalid_idx[b] = 1
-        #     if cx >= img_size[1] - EDGE_EFFECT_RANGE:
-        #         invalid_idx[b] = 1
-        #
-        # if np.any(invalid_idx):
-        #     boxes = boxes[invalid_idx == 0, :]
-        #     scores = scores[invalid_idx == 0]
-        #     class_label = class_label[invalid_idx == 0]
-
-    if np.size(boxes) > 0:
-        boxes = np.round(boxes).astype(np.int32)
-
-        # remove boxes whose centers are outside of the image area
-        center_xs = (boxes[:, 2] + boxes[:, 0]) / 2.0
-        center_ys = (boxes[:, 3] + boxes[:, 1]) / 2.0
-
-        invalid_idx = np.logical_or(np.logical_or(center_xs < 0, center_xs >= img_size[1]),
-                                    np.logical_or(center_ys < 0, center_ys >= img_size[0]))
-        if np.any(invalid_idx):
-            boxes = boxes[invalid_idx == 0, :]
-            scores = scores[invalid_idx == 0]
-            class_label = class_label[invalid_idx == 0]
-
-        # constrain boxes to exist within the image domain
-        boxes[boxes[:, 0] < 0, 0] = 0
-        boxes[boxes[:, 0] >= img_size[1], 0] = img_size[1] - 1
-
-        boxes[boxes[:, 1] < 0, 1] = 0
-        boxes[boxes[:, 1] >= img_size[0], 1] = img_size[0] - 1
-
-        boxes[boxes[:, 2] < 0, 2] = 0
-        boxes[boxes[:, 2] >= img_size[1], 2] = img_size[1] - 1
-
-        boxes[boxes[:, 3] < 0, 3] = 0
-        boxes[boxes[:, 3] >= img_size[0], 3] = img_size[0] - 1
-    else:
-        boxes = np.zeros((0, 4))
-        scores = np.zeros((0, 1))
-        class_label = np.zeros((0, 1))
-
-    # write merged rois
-    predictions = np.concatenate((boxes,scores, class_label), axis=-1)
-    return predictions
-
-
 def inference_image_tiled(yolo_model, img, tile_size, min_roi_size):
 
     print('reading image')
@@ -278,15 +199,19 @@ def inference_image_tiled(yolo_model, img, tile_size, min_roi_size):
         print('tile {}/{}'.format(i, len(tile_tensor)))
         # reshape to 1d array for TRT
         batch_data = tile_tensor[i].astype(np.float32)
-        batch_data = batch_data.reshape((1, 1, tile_size[0], tile_size[1]))
 
         # normalize with whole image stats
         batch_data = imagereader.zscore_normalize(batch_data)
         batch_tile_x_location = tile_x_location[i]
         batch_tile_y_location = tile_y_location[i]
 
-        feature_maps = yolo_model(batch_data, training=False)
-        boxes = model.YoloV3.convert_feature_map_to_inference_detections(feature_maps, [tile_size[0], tile_size[1]])
+        # convert HWC to CHW
+        batch_data = batch_data.transpose((2, 0, 1))
+        # convert CHW to NCHW
+        batch_data = batch_data.reshape((1, batch_data.shape[0], batch_data.shape[1], batch_data.shape[2]))
+        batch_data = tf.convert_to_tensor(batch_data)
+
+        boxes = yolo_model(batch_data, training=False)
 
         # strip out batch_size which is fixed at one
         boxes = np.array(boxes)
@@ -375,6 +300,7 @@ def inference_image_tiled(yolo_model, img, tile_size, min_roi_size):
         class_label = np.zeros((0, 1))
 
     # write merged rois
+    print('Found: {} rois'.format(boxes.shape[0]))
     predictions = np.concatenate((boxes,scores, class_label), axis=-1)
     return predictions
 
@@ -409,13 +335,8 @@ def inference_image_folder(image_folder, image_format, saved_model_filepath, out
             img = np.expand_dims(img, -1)
 
         print('  img.shape={}'.format(img.shape))
-        height, width, channels = img.shape
 
-        if height > tile_size[0] or width > tile_size[1]:
-            pass
-            predictions = inference_image_tiled(yolo_model, img, tile_size, min_roi_size)
-        else:
-            predictions = inference_image(yolo_model, img, min_roi_size)
+        predictions = inference_image_tiled(yolo_model, img, tile_size, min_roi_size)
 
         # write merged rois
         print('Found: {} rois'.format(predictions.shape[0]))
