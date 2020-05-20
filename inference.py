@@ -24,7 +24,7 @@ TILE_SIZE = 2048
 SAVE_IMG_WITH_BOXES_DRAWN = False
 
 
-def convert_image_to_tiles(img):
+def convert_image_to_tiles(img, tile_size):
     # get the height of the image
     height = img.shape[0]
     width = img.shape[1]
@@ -33,30 +33,32 @@ def convert_image_to_tiles(img):
     tile_list = list()
     tile_x_location = list()
     tile_y_location = list()
-    radius = EDGE_EFFECT_RANGE
-    tile_size = TILE_SIZE
-    assert tile_size % model.YoloV3.NETWORK_DOWNSAMPLE_FACTOR == 0
-    zone_of_responsibility_size = tile_size - 2 * radius
-    assert radius % model.YoloV3.NETWORK_DOWNSAMPLE_FACTOR == 0
+    radius = [EDGE_EFFECT_RANGE, EDGE_EFFECT_RANGE]
+    assert tile_size[0] % model.YoloV3.NETWORK_DOWNSAMPLE_FACTOR == 0
+    assert tile_size[1] % model.YoloV3.NETWORK_DOWNSAMPLE_FACTOR == 0
+    if tile_size[0] >= height:
+        radius[0] = 0
+    if tile_size[1] >= width:
+        radius[1] = 0
+    zone_of_responsibility_size = [tile_size[0] - 2 * radius[0], tile_size[1] - 2 * radius[1]]
+
+    assert radius[0] % model.YoloV3.NETWORK_DOWNSAMPLE_FACTOR == 0
+    assert radius[1] % model.YoloV3.NETWORK_DOWNSAMPLE_FACTOR == 0
 
     # loop over the input image cropping out (tile_size x tile_size) tiles
-    for i in range(0, height, zone_of_responsibility_size):
-        for j in range(0, width, zone_of_responsibility_size):
+    for i in range(0, height, zone_of_responsibility_size[0]):
+        for j in range(0, width, zone_of_responsibility_size[1]):
             # create a bounding box
             x_st_z = j
             y_st_z = i
-            x_end_z = x_st_z + zone_of_responsibility_size
-            y_end_z = y_st_z + zone_of_responsibility_size
+            x_end_z = x_st_z + zone_of_responsibility_size[1]
+            y_end_z = y_st_z + zone_of_responsibility_size[0]
 
             # pad zone of responsibility by radius
-            x_st = x_st_z - radius
-            y_st = y_st_z - radius
-            x_end = x_end_z + radius
-            y_end = y_end_z + radius
-
-            # append this tiles locations to the list
-            tile_x_location.append(x_st)
-            tile_y_location.append(y_st)
+            x_st = x_st_z - radius[1]
+            y_st = y_st_z - radius[0]
+            x_end = x_end_z + radius[1]
+            y_end = y_end_z + radius[0]
 
             pre_pad_x = 0
             if x_st < 0:
@@ -84,6 +86,10 @@ def convert_image_to_tiles(img):
             if pre_pad_x > 0 or post_pad_x > 0 or pre_pad_y > 0 or post_pad_y > 0:
                 # ensure its correct size (if tile exists at the edge of the image
                 tile = np.pad(tile, pad_width=((pre_pad_y, post_pad_y), (pre_pad_x, post_pad_x), (0, 0)), mode='reflect')
+
+            # append this tiles locations to the list
+            tile_x_location.append(x_st)
+            tile_y_location.append(y_st)
 
             # add to list
             tile_list.append(tile)
