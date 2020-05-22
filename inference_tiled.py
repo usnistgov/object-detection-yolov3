@@ -50,6 +50,7 @@ def convert_image_to_tiles(img, tile_size):
     # loop over the input image cropping out (tile_size x tile_size) tiles
     for i in range(0, height, zone_of_responsibility_size[0]):
         for j in range(0, width, zone_of_responsibility_size[1]):
+
             # create a bounding box
             x_st_z = j
             y_st_z = i
@@ -231,7 +232,6 @@ def inference_image_tiled(yolo_model, img, tile_size, min_roi_size):
             scores = scores.reshape((-1, 1))
             class_label = class_label.reshape((-1, 1))
 
-            # TODO: figure out how to handle edge effects when tiles might be smaller than the tile size. This scheme below no longer works given the new tiler.
             # remove boxes whose centers are in the EDGE_EFFECT ghost region
             invalid_idx = np.zeros((boxes.shape[0]), dtype=np.bool)
             center_xs = (boxes[:, 2] + boxes[:, 0]) / 2.0
@@ -239,14 +239,18 @@ def inference_image_tiled(yolo_model, img, tile_size, min_roi_size):
             for b in range(len(center_xs)):
                 cx = center_xs[b]
                 cy = center_ys[b]
+                # only remove boxes in the edge effect range if those boxes are not on the outside of the image
+                cx_global = cx + batch_tile_x_location
+                cy_global = cy + batch_tile_y_location
+
                 # handle which boundaries
-                if cy < EDGE_EFFECT_RANGE:
+                if cy_global > EDGE_EFFECT_RANGE and cy < EDGE_EFFECT_RANGE:
                     invalid_idx[b] = 1
-                if cy >= tile_size[0] - EDGE_EFFECT_RANGE:
+                if cy_global <= img_size[0] - EDGE_EFFECT_RANGE and cy >= tile_size[0] - EDGE_EFFECT_RANGE:
                     invalid_idx[b] = 1
-                if cx < EDGE_EFFECT_RANGE:
+                if cx_global > EDGE_EFFECT_RANGE and cx < EDGE_EFFECT_RANGE:
                     invalid_idx[b] = 1
-                if cx >= tile_size[1] - EDGE_EFFECT_RANGE:
+                if cx_global <= img_size[1] - EDGE_EFFECT_RANGE and cx >= tile_size[1] - EDGE_EFFECT_RANGE:
                     invalid_idx[b] = 1
 
             if np.any(invalid_idx):
