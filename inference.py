@@ -99,6 +99,7 @@ def convert_image_to_tiles(img, tile_size):
 
 def inference_image_tiled(yolo_model, img, min_box_size):
     height, width, channels = img.shape
+    img_size = img.shape
     with torch.no_grad():
         print('  converting image into tensors')
         tiles, tile_x_location, tile_y_location = convert_image_to_tiles(img)
@@ -143,14 +144,19 @@ def inference_image_tiled(yolo_model, img, min_box_size):
             for b in range(len(center_xs)):
                 cx = center_xs[b]
                 cy = center_ys[b]
+
+                # only remove boxes in the edge effect range if those boxes are not on the outside of the image
+                cx_global = cx + batch_tile_x_location
+                cy_global = cy + batch_tile_y_location
+
                 # handle which boundaries
-                if cy < EDGE_EFFECT_RANGE:
+                if cy_global > EDGE_EFFECT_RANGE and cy < EDGE_EFFECT_RANGE:
                     invalid_idx[b] = 1
-                if cy >= TILE_SIZE - EDGE_EFFECT_RANGE:
+                if cy_global <= img_size[0] - EDGE_EFFECT_RANGE and cy >= TILE_SIZE - EDGE_EFFECT_RANGE:
                     invalid_idx[b] = 1
-                if cx < EDGE_EFFECT_RANGE:
+                if cx_global > EDGE_EFFECT_RANGE and cx < EDGE_EFFECT_RANGE:
                     invalid_idx[b] = 1
-                if cx >= TILE_SIZE - EDGE_EFFECT_RANGE:
+                if cx_global <= img_size[1] - EDGE_EFFECT_RANGE and cx >= TILE_SIZE - EDGE_EFFECT_RANGE:
                     invalid_idx[b] = 1
 
             if np.any(invalid_idx):
