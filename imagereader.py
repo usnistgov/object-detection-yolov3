@@ -150,7 +150,10 @@ class ImageReader:
             # HWC
             self.image_size = [datum.img_height, datum.img_width, datum.channels]
 
-        self.number_classes = len(self.keys)
+        if empty_images_flag:
+            self.number_classes = len(self.keys) - 1
+        else:
+            self.number_classes = len(self.keys)
         print('Found images of shape: {}'.format(self.image_size))
 
         print('Dataset has {} examples'.format(len(self.keys_flat)))
