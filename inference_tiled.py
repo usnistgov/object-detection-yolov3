@@ -13,7 +13,7 @@ import os
 # set the system environment so that the PCIe GPU ids match the Nvidia ids in nvidia-smi
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 # gpus_to_use must bs comma separated list of gpu ids, e.g. "1,3,4"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # "0, 1" for multiple
+#os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # "0, 1" for multiple
 
 import numpy as np
 import skimage.io
