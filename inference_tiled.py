@@ -231,6 +231,7 @@ def inference_image_tiled(yolo_model, img, tile_size, min_roi_size):
             scores = scores.reshape((-1, 1))
             class_label = class_label.reshape((-1, 1))
 
+            # TODO: figure out how to handle edge effects when tiles might be smaller than the tile size. This scheme below no longer works given the new tiler.
             # remove boxes whose centers are in the EDGE_EFFECT ghost region
             invalid_idx = np.zeros((boxes.shape[0]), dtype=np.bool)
             center_xs = (boxes[:, 2] + boxes[:, 0]) / 2.0
