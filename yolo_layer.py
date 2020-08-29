@@ -1,3 +1,9 @@
+# NIST-developed software is provided by NIST as a public service. You may use, copy and distribute copies of the software in any medium, provided that you keep intact this entire notice. You may improve, modify and create derivative works of the software or any portion of the software, and you may copy and distribute such modifications or works. Modified works should carry a notice stating that you changed the software and should note the date and nature of any such change. Please explicitly acknowledge the National Institute of Standards and Technology as the source of the software.
+
+# NIST-developed software is expressly provided "AS IS." NIST MAKES NO WARRANTY OF ANY KIND, EXPRESS, IMPLIED, IN FACT OR ARISING BY OPERATION OF LAW, INCLUDING, WITHOUT LIMITATION, THE IMPLIED WARRANTY OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT AND DATA ACCURACY. NIST NEITHER REPRESENTS NOR WARRANTS THAT THE OPERATION OF THE SOFTWARE WILL BE UNINTERRUPTED OR ERROR-FREE, OR THAT ANY DEFECTS WILL BE CORRECTED. NIST DOES NOT WARRANT OR MAKE ANY REPRESENTATIONS REGARDING THE USE OF THE SOFTWARE OR THE RESULTS THEREOF, INCLUDING BUT NOT LIMITED TO THE CORRECTNESS, ACCURACY, RELIABILITY, OR USEFULNESS OF THE SOFTWARE.
+
+# You are solely responsible for determining the appropriateness of using and distributing the software and you assume all risks associated with its use, including but not limited to the risks and costs of program errors, compliance with applicable laws, damage to or loss of data, programs or equipment, and the unavailability or interruption of operation. This software is not intended to be used in any situation where a failure could cause risk of injury or damage to property. The software developed by NIST employees is not subject to copyright protection within the United States.
+
 import torch
 import torch.nn
 import numpy as np
@@ -6,6 +12,8 @@ import utils
 
 
 class YOLOLayer(torch.nn.Module):
+    STRIDES = [32, 16, 8]  # fixed
+
     """
     detection layer corresponding to yolo_layer.c of darknet
     """
@@ -23,60 +31,54 @@ class YOLOLayer(torch.nn.Module):
         """
 
         super(YOLOLayer, self).__init__()
-        strides = [32, 16, 8]  # fixed
+
         self.anchors = config_model['anchors']
         self.n_anchors = len(self.anchors)
         self.n_classes = config_model['number_classes']
         self.image_size = config_model['image_size']
         self.ignore_thres = ignore_thres
-        self.stride = strides[layer_nb]
-        # self.l2_loss = torch.nn.MSELoss(size_average=False)
-        # self.bce_loss = torch.nn.BCELoss(size_average=False)
+        self.stride = self.STRIDES[layer_nb]
         self.layer_nb = layer_nb
-
-        # self.all_anchors_grid = [(w / self.stride, h / self.stride)
-        #                          for w, h in self.anchors]
-        # self.masked_anchors = [self.all_anchors_grid[i]
-        #                        for i in self.anch_mask]
-        # self.ref_anchors = np.zeros((len(self.all_anchors_grid), 4))
-        # self.ref_anchors[:, 2:] = np.array(self.all_anchors_grid)
-        # self.ref_anchors = torch.FloatTensor(self.ref_anchors)
         self.conv = torch.nn.Conv2d(in_channels=in_ch,
                               out_channels=self.n_anchors * (self.n_classes + 5),
                               kernel_size=1, stride=1, padding=0)
-
 
     def reorg_layer(self, feature_map):
         # feature_map is [N, C, H, W]
 
         batchsize = feature_map.shape[0]
-        grid_size = feature_map.shape[2:]
+        grid_size = (int(self.image_size[0] / self.stride), int(self.image_size[1] / self.stride))
         n_ch = 5 + self.n_classes
-        dtype = torch.cuda.FloatTensor if feature_map.is_cuda else torch.FloatTensor
 
         # Convert feature_map to [N, H, W, C]
         feature_map = feature_map.permute(0, 2, 3, 1)
         # expand out channels dimension
         feature_map = feature_map.view(batchsize, grid_size[0], grid_size[1], self.n_anchors, n_ch)
+        # feature_map shape = [batch_size, h/stride, w/stride, n_anchors, n_ch]
 
         # feature_map.shape() = [B, nb_anchors, fsize_h, fsize_w, n_ch]
         # n_ch = [x, y, w, h, objectness_logits, class_logits(one per class)]
 
         # separate out feature_map components
-        box_xy = feature_map[..., 0:2]
-        box_wh = feature_map[..., 2:4]
+        boxes = feature_map[..., 0:4]
         objectness_logits = feature_map[..., 4:5]
         class_logits = feature_map[..., 5:]
 
         x_offset = np.arange(grid_size[1], dtype=np.float32)
-        x_offset = x_offset.reshape((1, 1, -1, 1))
-        x_offset = np.broadcast_to(x_offset, feature_map.shape[0:4])
-        x_offset = dtype(x_offset)
+        x_offset = np.reshape(x_offset, (1, np.size(x_offset), 1))
+        x_offset = np.broadcast_to(x_offset, [grid_size[0], grid_size[1], self.n_anchors])
+        x_offset = np.reshape(x_offset, (1, x_offset.shape[0], x_offset.shape[1], x_offset.shape[2]))
+        x_offset = torch.from_numpy(x_offset).type(feature_map.dtype)
+        if feature_map.is_cuda:
+            x_offset = x_offset.cuda()
 
         y_offset = np.arange(grid_size[0], dtype=np.float32)
-        y_offset = y_offset.reshape((1, -1, 1, 1))
-        y_offset = np.broadcast_to(y_offset, feature_map.shape[0:4])
-        y_offset = dtype(y_offset)
+        y_offset = np.reshape(y_offset, (np.size(y_offset), 1, 1))
+        y_offset = np.broadcast_to(y_offset, [grid_size[0], grid_size[1], self.n_anchors])
+        y_offset = np.reshape(y_offset, (1, y_offset.shape[0], y_offset.shape[1], y_offset.shape[2]))
+        y_offset = torch.from_numpy(y_offset).type(feature_map.dtype)
+        if feature_map.is_cuda:
+            y_offset = y_offset.cuda()
 
         # (c_x, c_y) the cell offsets is the integer number of the cell times the stride
 
@@ -89,19 +91,24 @@ class YOLOLayer(torch.nn.Module):
         # box_xy = cell_size * sigmoid(xy) + cell_offset
         # box_xy = cell_size * sigmoid(xy) + cell_size * xy_offset
         # box_xy = cell_size * (sigmoid(xy) + xy_offset)
-        box_xy[..., 0] = (torch.sigmoid(box_xy[..., 0]) + x_offset) * self.stride
-        box_xy[..., 1] = (torch.sigmoid(box_xy[..., 1]) + y_offset) * self.stride
+        # box_xy[..., 0] = (torch.sigmoid(box_xy[..., 0]) + x_offset) * self.stride
+        # box_xy[..., 1] = (torch.sigmoid(box_xy[..., 1]) + y_offset) * self.stride
+        boxes[..., 0] = (torch.sigmoid(boxes[..., 0]) + x_offset) * self.stride
+        boxes[..., 1] = (torch.sigmoid(boxes[..., 1]) + y_offset) * self.stride
 
         anchors = np.array(self.anchors)
-        w_anchors = dtype(np.broadcast_to(np.reshape(anchors[:, 0], (1, 1, 1, self.n_anchors)), feature_map.shape[:4]))
-        h_anchors = dtype(np.broadcast_to(np.reshape(anchors[:, 1], (1, 1, 1, self.n_anchors)), feature_map.shape[:4]))
+        w_anchors = np.reshape(anchors[:, 0], (1, 1, 1, self.n_anchors))
+        h_anchors = np.reshape(anchors[:, 1], (1, 1, 1, self.n_anchors))
+        w_anchors = torch.from_numpy(w_anchors).type(feature_map.dtype)
+        h_anchors = torch.from_numpy(h_anchors).type(feature_map.dtype)
+        if feature_map.is_cuda:
+            w_anchors = w_anchors.cuda()
+            h_anchors = h_anchors.cuda()
 
-        box_wh[..., 0] = torch.exp(box_wh[..., 0]) * w_anchors
-        box_wh[..., 1] = torch.exp(box_wh[..., 1]) * h_anchors
+        boxes[..., 2] = torch.exp(boxes[..., 2]) * w_anchors
+        boxes[..., 3] = torch.exp(boxes[..., 3]) * h_anchors
 
-        boxes = torch.cat((box_xy, box_wh), dim=-1)
         # boxes are [x, y, h, w] with (x, y) being center
-
         return boxes, objectness_logits, class_logits, x_offset, y_offset
 
     def gt_boxes_to_feature_map(self, boxes, grid_size):
@@ -190,46 +197,53 @@ class YOLOLayer(torch.nn.Module):
             loss_l2 (torch.Tensor): total l2 loss - only for logging.
         """
         feature_map = self.conv(xin)
+        if labels is None:  # not training
+            return feature_map
+
         batchsize = feature_map.shape[0]
-        grid_size = feature_map.shape[2:]
         n_ch = 5 + self.n_classes
 
         batch_pred_boxes, batch_objectness_logits, batch_class_logits, x_offset, y_offset = self.reorg_layer(feature_map)
-        # batch_pred_boxes = batch_pred_boxes.cpu()
-        # batch_objectness_logits = batch_objectness_logits.cpu()
-        # batch_class_logits = batch_class_logits.cpu()
-        # x_offset = x_offset.cpu()
-        # y_offset = y_offset.cpu()
-        # boxes is [x, y, w, h] where (x, y) is center
 
-        if labels is None:  # not training
-            batch_objectness_logits = torch.sigmoid(batch_objectness_logits)
-            #batch_class_logits = torch.sigmoid(batch_class_logits)
-            batch_class_logits = torch.nn.Softmax(dim=-1)(batch_class_logits)
-            predictions = torch.cat((batch_pred_boxes, batch_objectness_logits, batch_class_logits), dim=-1)
-            predictions = predictions.view(batchsize, -1, n_ch)
-            return predictions
+        # if labels is None:  # not training
+        #     batch_objectness_logits = torch.sigmoid(batch_objectness_logits)
+        #     batch_class_logits = torch.nn.Softmax(dim=-1)(batch_class_logits)
+        #     predictions = torch.cat((batch_pred_boxes, batch_objectness_logits, batch_class_logits), dim=-1)
+        #     # predictions = predictions.view(batchsize, -1, n_ch)
+        #     n = predictions.shape[1] * predictions.shape[2]
+        #     predictions = predictions.view(batchsize, n, n_ch)
+        #     # move (xc, yc) to (x, y)
+        #     predictions[:, :, 0] = predictions[:, :, 0] - (predictions[:, :, 2] / 2)
+        #     predictions[:, :, 1] = predictions[:, :, 1] - (predictions[:, :, 3] / 2)
+        #     #  prediction contains [x, y, w, h] with (x, y) being the top left of the box
+        #     return predictions
 
-        if torch.cuda.is_available():
-            dtype = torch.cuda.FloatTensor
-        else:
-            dtype = torch.FloatTensor
+        grid_size = feature_map.shape[2:]
 
         # labels is (B, K, 5); B = batch size; K = number boxes
         # last dimension of labels is [x, y, w, h, c] with (x, y) = top left; all in pixel coordinates
 
         batch_gt_data = self.gt_boxes_to_feature_map(labels, grid_size)
-        batch_gt_data = dtype(batch_gt_data)
+        batch_gt_data = torch.from_numpy(batch_gt_data).type(dtype=feature_map.dtype)
+        if torch.cuda.is_available():
+            batch_gt_data = batch_gt_data.cuda()
         batch_gt_data = batch_gt_data.detach()
 
         nlabel = (labels.sum(dim=2) > 0).sum(dim=1)  # number of objects
 
         bce_criterion = torch.nn.BCEWithLogitsLoss(reduction='none')
 
-        batch_objectness_loss = dtype(1).fill_(0)
-        batch_class_loss = dtype(1).fill_(0)
-        batch_xy_loss = dtype(1).fill_(0)
-        batch_wh_loss = dtype(1).fill_(0)
+        # initialize loss values to 0 as cuda tensors
+        batch_objectness_loss = torch.zeros(1, dtype=feature_map.dtype)
+        batch_class_loss = torch.zeros(1, dtype=feature_map.dtype)
+        batch_xy_loss = torch.zeros(1, dtype=feature_map.dtype)
+        batch_wh_loss = torch.zeros(1, dtype=feature_map.dtype)
+
+        if torch.cuda.is_available():
+            batch_objectness_loss = batch_objectness_loss.cuda()
+            batch_class_loss = batch_class_loss.cuda()
+            batch_xy_loss = batch_xy_loss.cuda()
+            batch_wh_loss = batch_wh_loss.cuda()
 
         for b in range(batchsize):
             n = int(nlabel[b])
@@ -279,7 +293,10 @@ class YOLOLayer(torch.nn.Module):
 
             # for objectness the (t_w, t_h) coordinate should be (p_w, p_w) the width and height of the anchor (prior)
             valid_true_box_wh = torch.ones_like(valid_true_box_wh)
-            valid_true_box_wh = valid_true_box_wh * dtype(self.anchors)  # multiply anchors to convert to (p_w, p_h)
+            anchors = torch.from_numpy(np.asarray(self.anchors)).type(dtype=feature_map.dtype)
+            if torch.cuda.is_available():
+                anchors = anchors.cuda()
+            valid_true_box_wh = valid_true_box_wh * anchors
             valid_true_boxes = torch.cat((valid_true_box_xy, valid_true_box_wh), dim=-1)
 
             # remove non-valid entries
@@ -341,36 +358,44 @@ class YOLOLayer(torch.nn.Module):
 
             # stride multiple of xy_offset is factored out to avoid extra computation
             # this is sigmoid(t_x)
-            true_xy[..., 0] = (true_xy[..., 0] / self.stride) - x_offset[b, ...]
-            true_xy[..., 1] = (true_xy[..., 1] / self.stride) - y_offset[b, ...]
+            true_xy[..., 0] = (true_xy[..., 0] / self.stride) - x_offset[0, ...]  # remove singleton batch dimension from offsets
+            true_xy[..., 1] = (true_xy[..., 1] / self.stride) - y_offset[0, ...]  # remove singleton batch dimension from offsets
 
             # shape: [batch_size, grid_size, grid_size, num_anchors, 2]
             pred_xy = pred_boxes[..., 0:2]  # these are = [cell_size * sigmoid(t_x) + c_x, cell_size * sigmoid(t_y) + c_y]
             # invert box_xy = (tf.nn.sigmoid(box_xy) + xy_offset) * stride from reorg_layer
-            pred_xy[..., 0] = (pred_xy[..., 0] / self.stride) - x_offset[b, ...]  # stride multiple of xy_offset is factored out to avoid extra computation
-            pred_xy[..., 1] = (pred_xy[..., 1] / self.stride) - y_offset[b, ...]
+            # stride multiple of xy_offset is factored out to avoid extra computation
+            pred_xy[..., 0] = (pred_xy[..., 0] / self.stride) - x_offset[0, ...]  # remove singleton batch dimension from offsets
+            pred_xy[..., 1] = (pred_xy[..., 1] / self.stride) - y_offset[0, ...]  # remove singleton batch dimension from offsets
 
-            # if you want to minimize (tx, ty) directly, uncomment this code. But loss based on (tx,ty) is much more unstable, and often goes to NaN. So using this requires care.
             # true_xy needs to be in (0, 1) non-inclusive in order to be within the valid output range of sigmoid
             clip_value = 0.01
             true_xy = torch.clamp(true_xy, clip_value, (1.0 - clip_value))
             pred_xy = torch.clamp(pred_xy, clip_value, (1.0 - clip_value))
 
             # invert sigmoid operation
-            one = dtype(1).fill_(1)
+            one = torch.ones(1, dtype=feature_map.dtype)
+            if torch.cuda.is_available():
+                one = one.cuda()
             true_xy = -torch.log(one / true_xy - one)  # invert sigmoid to get (t_x, t_y)
             pred_xy = -torch.log(one / pred_xy - one)  # invert sigmoid to get (t_x, t_y)
 
             # get_tw_th, numerical range: 0 ~ 1
             # shape: [batch_size, grid_size, grid_size, num_anchors, 2]
-            true_tw_th = gt_data[..., 2:4] / dtype(self.anchors)
-            pred_tw_th = pred_boxes[..., 2:4] / dtype(self.anchors)  # these are = [p_w*exp(t_w), p_h*exp(t_h)]
+            # pred_tw_th = [p_w*exp(t_w), p_h*exp(t_h)]
+            true_tw_th = gt_data[..., 2:4] / anchors
+            pred_tw_th = pred_boxes[..., 2:4] / anchors
+            # pred_tw_th = [exp(t_w), exp(t_h)]
 
             # for numerical stability
-            # true_tw_th = tf.where(condition=tf.equal(true_tw_th, 0), x=tf.ones_like(true_tw_th), y=true_tw_th)
-            # pred_tw_th = tf.where(condition=tf.equal(pred_tw_th, 0), x=tf.ones_like(pred_tw_th), y=pred_tw_th)
-            true_tw_th = torch.clamp(true_tw_th, 1e-9, 1e9)
-            pred_tw_th = torch.clamp(pred_tw_th, 1e-9, 1e9)
+            # machine_precision = np.finfo(true_tw_th.detach().cpu().numpy().dtype)
+            true_tw_th[true_tw_th == 0] = 1.0
+            pred_tw_th[pred_tw_th == 0] = 1.0
+            true_tw_th = torch.clamp(true_tw_th, 1e-2, 1e2)
+            pred_tw_th = torch.clamp(pred_tw_th, 1e-2, 1e2)
+            # invert the exp applied to (t_w and t_h)
+            true_tw_th = torch.log(true_tw_th)  # invert exp to get (t_w, t_h)
+            pred_tw_th = torch.log(pred_tw_th)  # invert exp to get (t_w, t_h)
 
             true_tw_th = torch.autograd.Variable(true_tw_th.data)
             true_xy = torch.autograd.Variable(true_xy.data)

@@ -1,3 +1,9 @@
+# NIST-developed software is provided by NIST as a public service. You may use, copy and distribute copies of the software in any medium, provided that you keep intact this entire notice. You may improve, modify and create derivative works of the software or any portion of the software, and you may copy and distribute such modifications or works. Modified works should carry a notice stating that you changed the software and should note the date and nature of any such change. Please explicitly acknowledge the National Institute of Standards and Technology as the source of the software.
+
+# NIST-developed software is expressly provided "AS IS." NIST MAKES NO WARRANTY OF ANY KIND, EXPRESS, IMPLIED, IN FACT OR ARISING BY OPERATION OF LAW, INCLUDING, WITHOUT LIMITATION, THE IMPLIED WARRANTY OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT AND DATA ACCURACY. NIST NEITHER REPRESENTS NOR WARRANTS THAT THE OPERATION OF THE SOFTWARE WILL BE UNINTERRUPTED OR ERROR-FREE, OR THAT ANY DEFECTS WILL BE CORRECTED. NIST DOES NOT WARRANT OR MAKE ANY REPRESENTATIONS REGARDING THE USE OF THE SOFTWARE OR THE RESULTS THEREOF, INCLUDING BUT NOT LIMITED TO THE CORRECTNESS, ACCURACY, RELIABILITY, OR USEFULNESS OF THE SOFTWARE.
+
+# You are solely responsible for determining the appropriateness of using and distributing the software and you assume all risks associated with its use, including but not limited to the risks and costs of program errors, compliance with applicable laws, damage to or loss of data, programs or equipment, and the unavailability or interruption of operation. This software is not intended to be used in any situation where a failure could cause risk of injury or damage to property. The software developed by NIST employees is not subject to copyright protection within the United States.
+
 import sys
 if sys.version_info[0] < 3:
     raise RuntimeError('Python3 required')
@@ -5,8 +11,6 @@ if sys.version_info[0] < 3:
 import os
 # set the system environment so that the PCIe GPU ids match the Nvidia ids in nvidia-smi
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-# gpus_to_use must bs comma separated list of gpu ids, e.g. "1,3,4"
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"  # "0, 1" for multiple
 
 import numpy as np
 import torch
@@ -17,14 +21,18 @@ import yolo_dataset
 import model
 import utils
 import bbox_utils
+import yolo_layer
 
 
 EDGE_EFFECT_RANGE = 96
-TILE_SIZE = 2048
+TILE_SIZE = 1024
 SAVE_IMG_WITH_BOXES_DRAWN = False
+# MIN_SCORE_THRESHOLD = 0.1
+IOU_THRESHOLD = 0.3
+MIN_BOX_SIZE = 12
 
 
-def convert_image_to_tiles(img, tile_size):
+def convert_image_to_tiles(img):
     # get the height of the image
     height = img.shape[0]
     width = img.shape[1]
@@ -33,32 +41,30 @@ def convert_image_to_tiles(img, tile_size):
     tile_list = list()
     tile_x_location = list()
     tile_y_location = list()
-    radius = [EDGE_EFFECT_RANGE, EDGE_EFFECT_RANGE]
-    assert tile_size[0] % model.YoloV3.NETWORK_DOWNSAMPLE_FACTOR == 0
-    assert tile_size[1] % model.YoloV3.NETWORK_DOWNSAMPLE_FACTOR == 0
-    if tile_size[0] >= height:
-        radius[0] = 0
-    if tile_size[1] >= width:
-        radius[1] = 0
-    zone_of_responsibility_size = [tile_size[0] - 2 * radius[0], tile_size[1] - 2 * radius[1]]
-
-    assert radius[0] % model.YoloV3.NETWORK_DOWNSAMPLE_FACTOR == 0
-    assert radius[1] % model.YoloV3.NETWORK_DOWNSAMPLE_FACTOR == 0
+    radius = EDGE_EFFECT_RANGE
+    tile_size = TILE_SIZE
+    assert tile_size % model.YoloV3.NETWORK_DOWNSAMPLE_FACTOR == 0
+    zone_of_responsibility_size = tile_size - 2 * radius
+    assert radius % model.YoloV3.NETWORK_DOWNSAMPLE_FACTOR == 0
 
     # loop over the input image cropping out (tile_size x tile_size) tiles
-    for i in range(0, height, zone_of_responsibility_size[0]):
-        for j in range(0, width, zone_of_responsibility_size[1]):
+    for i in range(0, height, zone_of_responsibility_size):
+        for j in range(0, width, zone_of_responsibility_size):
             # create a bounding box
             x_st_z = j
             y_st_z = i
-            x_end_z = x_st_z + zone_of_responsibility_size[1]
-            y_end_z = y_st_z + zone_of_responsibility_size[0]
+            x_end_z = x_st_z + zone_of_responsibility_size
+            y_end_z = y_st_z + zone_of_responsibility_size
 
             # pad zone of responsibility by radius
-            x_st = x_st_z - radius[1]
-            y_st = y_st_z - radius[0]
-            x_end = x_end_z + radius[1]
-            y_end = y_end_z + radius[0]
+            x_st = x_st_z - radius
+            y_st = y_st_z - radius
+            x_end = x_end_z + radius
+            y_end = y_end_z + radius
+
+            # append this tiles locations to the list
+            tile_x_location.append(x_st)
+            tile_y_location.append(y_st)
 
             pre_pad_x = 0
             if x_st < 0:
@@ -87,19 +93,20 @@ def convert_image_to_tiles(img, tile_size):
                 # ensure its correct size (if tile exists at the edge of the image
                 tile = np.pad(tile, pad_width=((pre_pad_y, post_pad_y), (pre_pad_x, post_pad_x), (0, 0)), mode='reflect')
 
-            # append this tiles locations to the list
-            tile_x_location.append(x_st)
-            tile_y_location.append(y_st)
-
             # add to list
             tile_list.append(tile)
 
     return tile_list, tile_x_location, tile_y_location
 
 
-def inference_image_tiled(yolo_model, img, min_box_size):
-    height, width, channels = img.shape
+def inference_image_tiled(yolo_model, img, config, min_score_threshold):
+    if type(yolo_model) is torch.nn.DataParallel:
+        number_classes = yolo_model.module.number_classes
+    else:
+        number_classes = yolo_model.number_classes
+
     img_size = img.shape
+    height, width, channels = img.shape
     with torch.no_grad():
         print('  converting image into tensors')
         tiles, tile_x_location, tile_y_location = convert_image_to_tiles(img)
@@ -122,17 +129,22 @@ def inference_image_tiled(yolo_model, img, min_box_size):
             batch_data = torch.from_numpy(batch_data)
             batch_data = batch_data.cuda(non_blocking=True)
 
-            predictions = yolo_model(batch_data)
-            # boxes are [x, y, w, h] where (x, y) is center
-            if type(yolo_model) is torch.nn.DataParallel:
-                predictions = utils.postprocess(predictions, yolo_model.module.number_classes, score_threshold=0.1, iou_threshold=0.3, min_box_size=min_box_size)
-            else:
-                predictions = utils.postprocess(predictions, yolo_model.number_classes, score_threshold=0.1, iou_threshold=0.3, min_box_size=min_box_size)
+            feature_maps = yolo_model(batch_data)
+
+            predictions = list()
+            for i in range(len(feature_maps)):
+                feature_map = feature_maps[i].cpu().numpy()
+                preds = utils.reorg_layer_np(feature_map, yolo_layer.YOLOLayer.STRIDES[i], config['number_classes'], config['anchors'])
+                predictions.append(preds)
+            predictions = np.concatenate(predictions, axis=1)
+
+            predictions = utils.postprocess_numpy(predictions, number_classes, score_threshold=min_score_threshold,
+                                                  iou_threshold=IOU_THRESHOLD, min_box_size=MIN_BOX_SIZE)
             predictions = predictions[0]  # extract off batch size of 1 since postprocess returns a list of batch_size
-            if predictions is None:
-                continue  # no boxes detected
-            predictions = predictions.cpu().numpy()
             # predictions = [x, y, w, h, score, pred_class] where (x, y) is upper left
+
+            if predictions.shape[0] == 0:
+                continue  # no boxes detected
 
             # round the boxes
             predictions[:, 0:4] = np.round(predictions[:, 0:4])
@@ -144,7 +156,6 @@ def inference_image_tiled(yolo_model, img, min_box_size):
             for b in range(len(center_xs)):
                 cx = center_xs[b]
                 cy = center_ys[b]
-
                 # only remove boxes in the edge effect range if those boxes are not on the outside of the image
                 cx_global = cx + batch_tile_x_location
                 cy_global = cy + batch_tile_y_location
@@ -203,7 +214,12 @@ def inference_image_tiled(yolo_model, img, min_box_size):
     return boxes
 
 
-def inference_image(yolo_model, img, min_box_size):
+def inference_image(yolo_model, img, config, min_score_threshold):
+    if type(yolo_model) is torch.nn.DataParallel:
+        number_classes = yolo_model.module.number_classes
+    else:
+        number_classes = yolo_model.number_classes
+
     height, width, channels = img.shape
     with torch.no_grad():
         img = img.astype(np.float32)
@@ -217,19 +233,24 @@ def inference_image(yolo_model, img, min_box_size):
         batch_data = torch.from_numpy(batch_data)
         batch_data = batch_data.cuda(non_blocking=True)
 
-        predictions = yolo_model(batch_data)
-        # boxes are [x, y, h, w] with (x, y) being center
-        if type(yolo_model) is torch.nn.DataParallel:
-            predictions = utils.postprocess(predictions, yolo_model.module.number_classes, score_threshold=0.1, iou_threshold=0.3, min_box_size=min_box_size)
-        else:
-            predictions = utils.postprocess(predictions, yolo_model.number_classes, score_threshold=0.1, iou_threshold=0.3, min_box_size=min_box_size)
-        predictions = predictions[0]  # extract off batch size of 1 since postprocess returns a list of batch_size
-        if predictions is None:
-            # no boxes detected
-            return np.zeros((0, 6))
+        feature_maps = yolo_model(batch_data)
 
-        # predictions = [x, y, w, h, score, pred_class]
-        predictions = predictions.cpu().numpy()
+        predictions = list()
+        for i in range(len(feature_maps)):
+            feature_map = feature_maps[i].cpu().numpy()
+            preds = utils.reorg_layer_np(feature_map, yolo_layer.YOLOLayer.STRIDES[i], config['number_classes'], config['anchors'])
+            predictions.append(preds)
+        predictions = np.concatenate(predictions, axis=1)
+
+        predictions = utils.postprocess_numpy(predictions, number_classes, score_threshold=min_score_threshold, iou_threshold=IOU_THRESHOLD, min_box_size=MIN_BOX_SIZE)
+        predictions = predictions[0]  # extract off batch size of 1 since postprocess returns a list of batch_size
+        # predictions = [x, y, w, h, score, pred_class] where (x, y) is upper left
+
+        if predictions.shape[0] == 0:
+            return predictions  # no boxes detected
+
+        # round the boxes
+        predictions[:, 0:4] = np.round(predictions[:, 0:4])
 
         # convert [x, y, w, h] to [x1, y1, x2, y2]
         predictions[:, 2] = predictions[:, 0] + predictions[:, 2]
@@ -260,15 +281,34 @@ def inference_image(yolo_model, img, min_box_size):
     return predictions
 
 
-def inference_image_folder(image_folder, image_format, checkpoint_filepath, output_folder, min_box_size):
-    # create output filepath
-    if not os.path.exists(output_folder):
-        os.mkdir(output_folder)
+def read_image(fp):
+    from czifile import CziFile  # from https://raw.githubusercontent.com/AllenCellModeling/pytorch_fnet/master/aicsimage/io/czifile.py
+    if fp.endswith('.czi'):
+        with CziFile(fp) as czi:
+            img = czi.asarray(resize=False)
+            print("Loaded CZI image shape = ", img.shape)
+            img = img.squeeze()
+    else:
+        img = skimage.io.imread(fp, as_gray=True)
+    return img
+
+
+def inference_image_folder(image_folder, image_format, checkpoint_filepath, output_folder, csv_file_list=None, min_score_threshold=0.1):
+    if not os.path.exists(checkpoint_filepath):
+        raise RuntimeError('Missing Checkpoint File')
 
     if image_format.startswith('.'):
         image_format = image_format[1:]
 
-    img_filepath_list = [os.path.join(image_folder, fn) for fn in os.listdir(image_folder) if fn.endswith('.{}'.format(image_format))]
+    img_filepath_list = [fn for fn in os.listdir(image_folder) if fn.endswith('.{}'.format(image_format))]
+
+    if csv_file_list is not None:
+        csv_file_list = [fn.replace('.csv','') for fn in csv_file_list]
+        csv_file_list = [fn.replace('.{}'.format(image_format), '') for fn in csv_file_list]
+        img_filepath_list = [fn for fn in img_filepath_list if fn.replace('.{}'.format(image_format), '') in csv_file_list]
+
+    # prepend the folder
+    img_filepath_list = [os.path.join(image_folder, fn) for fn in img_filepath_list]
 
     # load the saved model
     ckpt_folder, _ = os.path.split(checkpoint_filepath)
@@ -286,6 +326,10 @@ def inference_image_folder(image_folder, image_format, checkpoint_filepath, outp
     yolo_model = yolo_model.cuda()
     yolo_model.eval()
 
+    # create output filepath
+    if not os.path.exists(output_folder):
+        os.makedirs(output_folder)
+
     print('Starting inference of file list')
     for i in range(len(img_filepath_list)):
         img_filepath = img_filepath_list[i]
@@ -293,7 +337,8 @@ def inference_image_folder(image_folder, image_format, checkpoint_filepath, outp
         print('{}/{} : {}'.format(i, len(img_filepath_list), file_name))
 
         print('Loading image: {}'.format(img_filepath))
-        img = skimage.io.imread(img_filepath)
+        # img = skimage.io.imread(img_filepath)
+        img = read_image(img_filepath)
         if len(img.shape) == 2:
             img = np.expand_dims(img, -1)
 
@@ -301,9 +346,10 @@ def inference_image_folder(image_folder, image_format, checkpoint_filepath, outp
         height, width, channels = img.shape
 
         if height > TILE_SIZE or width > TILE_SIZE:
-            predictions = inference_image_tiled(yolo_model, img, min_box_size)
+            pass
+            predictions = inference_image_tiled(yolo_model, img, config, min_score_threshold)
         else:
-            predictions = inference_image(yolo_model, img, min_box_size)
+            predictions = inference_image(yolo_model, img, config, min_score_threshold)
 
         if SAVE_IMG_WITH_BOXES_DRAWN:
             # predictions = [x1, y1, x2, y2, score, pred_class]
@@ -333,7 +379,7 @@ if __name__ == "__main__":
                         help='filepath to the folder containing tif images to inference (Required)', required=True)
     parser.add_argument('--image-format', dest='image_format', type=str,
                         help='format (extension) of the input images. E.g {tif, jpg, png)', default='tif')
-    parser.add_argument('--min-box-size', type=int, default=32, help='Smallest detection to consider. Default (32, 32).')
+    parser.add_argument('--csv-file-list', dest='csv_file_list', type=str,help='csv file containing ', default=None)
 
     args = parser.parse_args()
 
@@ -341,13 +387,17 @@ if __name__ == "__main__":
     image_folder = args.image_folder
     output_folder = args.output_folder
     image_format = args.image_format
-    min_box_size = args.min_box_size
+    csv_file_list = args.csv_file_list
 
     print('Arguments:')
     print('checkpoint_filepath = {}'.format(checkpoint_filepath))
     print('image_folder = {}'.format(image_folder))
     print('output_folder = {}'.format(output_folder))
     print('image_format = {}'.format(image_format))
-    print('min_box_size = {}'.format(min_box_size))
+    if csv_file_list is not None:
+        print('csv_file_list = {}'.format(csv_file_list))
+        with open(csv_file_list, 'r') as fh:
+            file_list = fh.readlines()
+            file_list = [fn.strip() for fn in file_list]
 
-    inference_image_folder(image_folder, image_format, checkpoint_filepath, output_folder, min_box_size)
+    inference_image_folder(image_folder, image_format, checkpoint_filepath, output_folder, csv_file_list)

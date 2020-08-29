@@ -3,33 +3,29 @@
 # NIST-developed software is expressly provided "AS IS." NIST MAKES NO WARRANTY OF ANY KIND, EXPRESS, IMPLIED, IN FACT OR ARISING BY OPERATION OF LAW, INCLUDING, WITHOUT LIMITATION, THE IMPLIED WARRANTY OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT AND DATA ACCURACY. NIST NEITHER REPRESENTS NOR WARRANTS THAT THE OPERATION OF THE SOFTWARE WILL BE UNINTERRUPTED OR ERROR-FREE, OR THAT ANY DEFECTS WILL BE CORRECTED. NIST DOES NOT WARRANT OR MAKE ANY REPRESENTATIONS REGARDING THE USE OF THE SOFTWARE OR THE RESULTS THEREOF, INCLUDING BUT NOT LIMITED TO THE CORRECTNESS, ACCURACY, RELIABILITY, OR USEFULNESS OF THE SOFTWARE.
 
 # You are solely responsible for determining the appropriateness of using and distributing the software and you assume all risks associated with its use, including but not limited to the risks and costs of program errors, compliance with applicable laws, damage to or loss of data, programs or equipment, and the unavailability or interruption of operation. This software is not intended to be used in any situation where a failure could cause risk of injury or damage to property. The software developed by NIST employees is not subject to copyright protection within the United States.
-
 import sys
 if sys.version_info[0] < 3:
     raise RuntimeError('Python3 required')
 
-import skimage.io
 import numpy as np
 import os
-import skimage
+import skimage.io
 import skimage.transform
 from isg_ai_pb2 import ImageYoloBoxesPair
 import shutil
 import lmdb
 import argparse
+import multiprocessing
 import random
 
 import bbox_utils
 
-
-def read_image(fp):
-    img = skimage.io.imread(fp)
-    return img
+TILE_SIZE = 1024
+N_WORKERS = 4
 
 
 def compute_intersection(box, boxes):
     # all boxes are [left, top, right, bottom]
-
     intersection = 0
     if boxes.shape[0] > 0:
         # this is the iou of the box against all other boxes
@@ -69,58 +65,163 @@ def write_img_to_db(txn, img, boxes, key_str):
     return
 
 
-def generate_database(csv_files, img_files, output_folder, database_name):
-    print('Generating database {}'.format(database_name))
+def process_slide_tiling(csv_filepath, img_filepath):
+    boxes = bbox_utils.load_boxes_to_ltrbc(csv_filepath)
+    img = skimage.io.imread(img_filepath)
+    
+    csv_file_name = os.path.basename(csv_filepath)
+    block_key = csv_file_name.replace('.csv', '')
+
+    # get the height of the image
+    height = img.shape[0]
+    width = img.shape[1]
+
+    img_list = list()
+    box_list = list()
+    key_list = list()
+
+    delta_y = TILE_SIZE
+    if height > TILE_SIZE:
+        delta_y = int(TILE_SIZE - 96)
+    delta_x = TILE_SIZE
+    if width > TILE_SIZE:
+        delta_x = int(TILE_SIZE - 96)
+
+    for x_st in range(0, width, delta_x):
+        for y_st in range(0, height, delta_y):
+            x_end = x_st + TILE_SIZE
+            y_end = y_st + TILE_SIZE
+            if x_end > width:
+                # slide box to fit within image
+                dx = width - x_end
+                x_st = x_st + dx
+                x_end = x_end + dx
+            if y_end > height:
+                # slide box to fit within image
+                dy = height - y_end
+                y_st = y_st + dy
+                y_end = y_end + dy
+
+            if x_st < 0 or y_st < 0:
+                print('Cannot use image {} as it smaller than the specified tile size'.format(img_filepath))
+                # if input image is smaller than the tile size
+                return img_list, box_list, key_list
+
+            box = np.zeros((1, 4))
+            box[0, 0] = x_st
+            box[0, 1] = y_st
+            box[0, 2] = x_end
+            box[0, 3] = y_end
+
+            # crop out the tile
+            pixels = img[y_st:y_end, x_st:x_end]
+
+            # create a full resolution mask, which will be downsampled later after random cropping
+            intersection = compute_intersection(box[0, :], boxes)
+            tmp_boxes = boxes[intersection > 0, :]
+            new_boxes = list()
+            # loop over the tile to determine which pixels belong to the foreground
+            for i in range(tmp_boxes.shape[0]):
+                bx_st = int(tmp_boxes[i, 0] - x_st)  # local pixels coordinate
+                by_st = int(tmp_boxes[i, 1] - y_st)  # local pixels coordinate
+                bx_end = int(tmp_boxes[i, 2] - x_st)  # local pixels coordinate
+                by_end = int(tmp_boxes[i, 3] - y_st)  # local pixels coordinate
+
+                bx_st = max(0, bx_st)
+                by_st = max(0, by_st)
+                bx_end = min(bx_end, pixels.shape[1])
+                by_end = min(by_end, pixels.shape[0])
+
+                w = bx_end - bx_st + 1
+                h = by_end - by_st + 1
+
+                # ensure minimum viable overlap with actual tile
+                if w > 12 and h > 12:
+                    new_boxes.append([bx_st, by_st, w, h, tmp_boxes[i, 4]])  # dim 5 is class id of the box
+
+            if len(new_boxes) == 0:
+                # if not valid boxes, create empty array
+                new_boxes = np.zeros((0, 5), dtype=np.int32)
+            else:
+                new_boxes = np.vstack(new_boxes)
+
+            img_list.append(pixels)
+            box_list.append(new_boxes)
+
+            if len(new_boxes) == 0:
+                present_classes_str = '0'
+            else:
+                present_classes_str = '1'
+            key_str = '{}_i{}_j{}:{}'.format(block_key, y_st, x_st, present_classes_str)
+            key_list.append(key_str)
+
+    return img_list, box_list, key_list
+
+
+def generate_database(csv_files, img_files, output_folder, database_name, prefix):
+    print('Generating data crops')
     output_image_lmdb_file = os.path.join(output_folder, database_name)
 
     if os.path.exists(output_image_lmdb_file):
         print('Deleting existing database')
         shutil.rmtree(output_image_lmdb_file)
 
+    print('Opening lmdb database')
     image_env = lmdb.open(output_image_lmdb_file, map_size=int(5e12))
     image_txn = image_env.begin(write=True)
 
-    txn_nb = 0
+    print('opening multiprocessing pool with {} workers'.format(N_WORKERS))
+    with multiprocessing.Pool(processes=N_WORKERS) as pool:
 
-    for i in range(len(img_files)):
-        img_fp = img_files[i]
-        csv_fp = csv_files[i]
+        stride = 100  # stride across the data, since we cannot fit all the results in memory at once
+        for st_idx in range(0, len(csv_files), stride):
+            print('{}/{}'.format(st_idx, len(csv_files)))
+            tmp_csv_files = csv_files[st_idx:st_idx + stride]  # if numpy index goes beyond the end, its ignored
+            tmp_data_files = img_files[st_idx:st_idx + stride]
 
-        img = read_image(img_fp)
-        boxes = bbox_utils.load_boxes_to_xywhc(csv_fp)
-        present_classes = np.unique(boxes[:,4].squeeze()).astype(np.int32)
-        key_str = os.path.basename(csv_fp)
-        key_str, _ = os.path.splitext(key_str)
-        key_str = "{}_{}".format(txn_nb, key_str)
-        present_classes_list = [str(k) for k in present_classes]
-        class_str = ','.join(present_classes_list)
-        key_str = key_str + ':' + class_str
+            results = pool.starmap(process_slide_tiling, zip(tmp_csv_files, tmp_data_files))
 
-        txn_nb += 1
-        write_img_to_db(image_txn, img, boxes, key_str)
+            for res in results:
+                img_list, box_list, key_list = res
 
-        if txn_nb % 1000 == 0:
+                for j in range(len(img_list)):
+                    img = img_list[j]
+                    boxes = box_list[j]
+
+                    if np.any(boxes[:,4] > 0):
+                        print('what?')
+
+                    key_str = key_list[j]
+
+                    write_img_to_db(image_txn, img, boxes, key_str)
+
             image_txn.commit()
             image_txn = image_env.begin(write=True)
 
     image_txn.commit()
     image_env.close()
-    print('  database has {} elements'.format(txn_nb))
 
-    with open(os.path.join(output_image_lmdb_file, 'annotation_list.csv'), 'w') as fh:
-        for key_str in csv_files:
-            key_str = os.path.basename(key_str)
-            key_str, _ = os.path.splitext(key_str)
-            fh.write('{}\n'.format(key_str))
+    with open(os.path.join(output_folder, database_name, '{}_block_list.csv'.format(prefix)), 'w') as fh:
+        for block_str in csv_files:
+            block_str = os.path.basename(block_str)
+            block_str, _ = os.path.splitext(block_str)
+            fh.write('{}\n'.format(block_str))
 
 
 def build_lmdb(image_folder, csv_folder, output_folder, dataset_name, train_fraction, image_format):
+    if image_format.startswith('.'):
+        image_format = image_format[1:]
+
     if not os.path.exists(output_folder):
         os.mkdir(output_folder)
     # find the image files for which annotations exist
     csv_files = [f for f in os.listdir(csv_folder) if f.endswith('.csv')]
     # in place shuffle
     random.shuffle(csv_files)
+
+    # # to build mini dataset for debugging
+    # csv_files = [fn for fn in csv_files if os.path.getsize(os.path.join(csv_folder, fn)) > 12]
+    # csv_files = csv_files[0:100]
 
     img_files = [fn.replace('.csv', '.{}'.format(image_format)) for fn in csv_files]
 
@@ -134,10 +235,10 @@ def build_lmdb(image_folder, csv_folder, output_folder, dataset_name, train_frac
     test_img_files = img_files[idx:]
 
     database_name = 'train-' + dataset_name + '.lmdb'
-    generate_database(train_csv_files, train_img_files, output_folder, database_name)
+    generate_database(train_csv_files, train_img_files, output_folder, database_name, prefix='train')
 
     database_name = 'test-' + dataset_name + '.lmdb'
-    generate_database(test_csv_files, test_img_files, output_folder, database_name)
+    generate_database(test_csv_files, test_img_files, output_folder, database_name, prefix='test')
 
 
 if __name__ == "__main__":
