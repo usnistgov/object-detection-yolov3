@@ -1,4 +1,5 @@
 import sys
+
 if sys.version_info[0] < 3:
     raise RuntimeError('Python3 required')
 
@@ -8,6 +9,7 @@ mpl.use('Agg')
 import matplotlib.pyplot as plt
 
 import os
+
 # set the system environment so that the PCIe GPU ids match the Nvidia ids in nvidia-smi
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 
@@ -75,7 +77,7 @@ def train_model(config, output_folder, early_stopping_count, use_amp):
     if use_amp:
         print('Using AMP')
 
-    num_workers = 30 # TODO remove
+    num_workers = 30  # TODO remove
 
     torch_model_ofp = os.path.join(output_folder, 'checkpoint')
     if os.path.exists(torch_model_ofp):
@@ -84,10 +86,9 @@ def train_model(config, output_folder, early_stopping_count, use_amp):
     os.makedirs(torch_model_ofp)
 
     pin_dataloader_memory = True
-    torch.backends.cudnn.benchmark = True # autotune cudnn kernel choice
+    torch.backends.cudnn.benchmark = True  # autotune cudnn kernel choice
     # disable debugging API, turn on for debugging
     torch.autograd.set_detect_anomaly(False)
-
 
     train_dataset = yolo_dataset.YoloDataset(config['train_lmdb_filepath'], augment=config['augment'])
     train_sampler = train_dataset.get_weighted_sampler()  # this tells pytorch how to weight samples to balance the classes
@@ -117,7 +118,7 @@ def train_model(config, output_folder, early_stopping_count, use_amp):
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.1)
 
     # # load a checkpoint to continue refining training
-    # checkpoint_filepath = '/home/mmajurski/nist/argus/MITS/src/star-detector-cnn-dev/pytorch_yolov3/yolov3-20200817T095605/checkpoint/yolov3.ckpt'
+    # checkpoint_filepath = ''
     # if checkpoint_filepath is not None:
     #     checkpoint = torch.load(checkpoint_filepath)
     #     yolo_model.load_state_dict(checkpoint['model_state_dict'])
@@ -247,10 +248,10 @@ def train_model(config, output_folder, early_stopping_count, use_amp):
                         preds = utils.reorg_layer_np(feature_map, yolo_layer.YOLOLayer.STRIDES[i], config['number_classes'], config['anchors'])
                         predictions.append(preds)
                     predictions = np.concatenate(predictions, axis=1)
-                    
+
                     predictions = utils.postprocess_numpy(predictions, yolo_model.module.number_classes,
-                                                    score_threshold=MIN_SCORE_THRESHOLD, iou_threshold=IOU_THRESHOLD,
-                                                    min_box_size=min_box_size)
+                                                          score_threshold=MIN_SCORE_THRESHOLD, iou_threshold=IOU_THRESHOLD,
+                                                          min_box_size=min_box_size)
                     # predictions = [x, y, w, h, score, pred_class] where (x, y) is upper left
                     target = target.detach().cpu().numpy()
 
@@ -260,9 +261,9 @@ def train_model(config, output_folder, early_stopping_count, use_amp):
                         pred = predictions[b]
                         if pred is None:
                             # no boxes detected
-                            pred = np.zeros((0,6))
+                            pred = np.zeros((0, 6))
                         idx = np.sum(tgt, axis=1) > 0
-                        tgt = tgt[idx,:]
+                        tgt = tgt[idx, :]
                         # convert [x, y, w, h] to [x1, y1, x2, y2]
                         tgt[:, 2] = tgt[:, 0] + tgt[:, 2]
                         tgt[:, 3] = tgt[:, 1] + tgt[:, 3]
@@ -303,7 +304,6 @@ def train_model(config, output_folder, early_stopping_count, use_amp):
                 file.write('Epoch, TP, FP, FN\n')
                 for i in range(len(TP_count_list)):
                     file.write('{}, {}, {}, {}\n'.format(i, TP_count_list[i], FP_count_list[i], FN_count_list[i]))
-
 
         print('Best Current Epoch Selection:')
         print('Test Loss:')
@@ -364,7 +364,7 @@ if __name__ == "__main__":
     parser.add_argument('--early_stopping', dest='early_stopping', type=int, help='Perform early stopping when the test loss does not improve for N epochs.', default=10)
     parser.add_argument('--use_augmentation', dest='use_augmentation', type=int,
                         help='whether to use data augmentation [0 = false, 1 = true]', default=1)
-    parser.add_argument('--use_amp', dest='use_amp', type=int, help = 'whether to use AMP [0 = false, 1 = true]', default=0)
+    parser.add_argument('--use_amp', dest='use_amp', type=int, help='whether to use AMP [0 = false, 1 = true]', default=0)
 
     args = parser.parse_args()
 

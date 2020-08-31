@@ -1,3 +1,9 @@
+# NIST-developed software is provided by NIST as a public service. You may use, copy and distribute copies of the software in any medium, provided that you keep intact this entire notice. You may improve, modify and create derivative works of the software or any portion of the software, and you may copy and distribute such modifications or works. Modified works should carry a notice stating that you changed the software and should note the date and nature of any such change. Please explicitly acknowledge the National Institute of Standards and Technology as the source of the software.
+
+# NIST-developed software is expressly provided "AS IS." NIST MAKES NO WARRANTY OF ANY KIND, EXPRESS, IMPLIED, IN FACT OR ARISING BY OPERATION OF LAW, INCLUDING, WITHOUT LIMITATION, THE IMPLIED WARRANTY OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT AND DATA ACCURACY. NIST NEITHER REPRESENTS NOR WARRANTS THAT THE OPERATION OF THE SOFTWARE WILL BE UNINTERRUPTED OR ERROR-FREE, OR THAT ANY DEFECTS WILL BE CORRECTED. NIST DOES NOT WARRANT OR MAKE ANY REPRESENTATIONS REGARDING THE USE OF THE SOFTWARE OR THE RESULTS THEREOF, INCLUDING BUT NOT LIMITED TO THE CORRECTNESS, ACCURACY, RELIABILITY, OR USEFULNESS OF THE SOFTWARE.
+
+# You are solely responsible for determining the appropriateness of using and distributing the software and you assume all risks associated with its use, including but not limited to the risks and costs of program errors, compliance with applicable laws, damage to or loss of data, programs or equipment, and the unavailability or interruption of operation. This software is not intended to be used in any situation where a failure could cause risk of injury or damage to property. The software developed by NIST employees is not subject to copyright protection within the United States.
+
 import sys
 if sys.version_info[0] < 3:
     raise RuntimeError('Python3 required')
@@ -7,7 +13,7 @@ import os
 import csv
 
 
-def draw_boxes(img, boxes):
+def draw_boxes(img, boxes, value=0):
     buff = 2
 
     if boxes is None:
@@ -28,21 +34,21 @@ def draw_boxes(img, boxes):
         y_end = int(round(y_st + h + 1))
 
         # draw a rectangle around the region of interest
-        img[y_st:y_st+buff, x_st:x_end] = 0
-        img[y_end-buff:y_end, x_st:x_end] = 0
-        img[y_st:y_end, x_st:x_st+buff] = 0
-        img[y_st:y_end, x_end-buff:x_end] = 0
+        img[y_st:y_st+buff, x_st:x_end] = value
+        img[y_end-buff:y_end, x_st:x_end] = value
+        img[y_st:y_end, x_st:x_st+buff] = value
+        img[y_st:y_end, x_end-buff:x_end] = value
 
     return img
 
 
 def write_boxes_from_xywhc(boxes, csv_filename):
-
+    boxes = boxes.astype(np.int32)
     # write the header to a new file
     with open(csv_filename, 'w') as fh:
         fh.write('X,Y,W,H,C\n')
 
-        # loop over the selected stars saving them as tiffs thumbnails
+        # loop over the selected boxes saving them as tiffs thumbnails
         for k in range(boxes.shape[0]):
             # get the current annotation location
             x = boxes[k, 0]
@@ -55,12 +61,12 @@ def write_boxes_from_xywhc(boxes, csv_filename):
 
 
 def write_boxes_from_ltrbc(boxes, csv_filename):
-
+    boxes = boxes.astype(np.int32)
     # write the header to a new file
     with open(csv_filename, 'w') as fh:
         fh.write('X,Y,W,H,C\n')
 
-        # loop over the selected stars saving them as tiffs thumbnails
+        # loop over the selected boxes saving them as tiffs thumbnails
         for k in range(boxes.shape[0]):
             # get the current annotation location
             x = boxes[k, 0]
@@ -78,7 +84,7 @@ def write_boxes_from_ltrbpc(boxes, csv_filename):
     with open(csv_filename, 'w') as fh:
         fh.write('X,Y,W,H,P,C\n')
 
-        # loop over the selected stars saving them as tiffs thumbnails
+        # loop over the selected boxes saving them as tiffs thumbnails
         for k in range(boxes.shape[0]):
             # get the current annotation location
             x = int(boxes[k, 0])

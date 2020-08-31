@@ -1,3 +1,9 @@
+# NIST-developed software is provided by NIST as a public service. You may use, copy and distribute copies of the software in any medium, provided that you keep intact this entire notice. You may improve, modify and create derivative works of the software or any portion of the software, and you may copy and distribute such modifications or works. Modified works should carry a notice stating that you changed the software and should note the date and nature of any such change. Please explicitly acknowledge the National Institute of Standards and Technology as the source of the software.
+
+# NIST-developed software is expressly provided "AS IS." NIST MAKES NO WARRANTY OF ANY KIND, EXPRESS, IMPLIED, IN FACT OR ARISING BY OPERATION OF LAW, INCLUDING, WITHOUT LIMITATION, THE IMPLIED WARRANTY OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT AND DATA ACCURACY. NIST NEITHER REPRESENTS NOR WARRANTS THAT THE OPERATION OF THE SOFTWARE WILL BE UNINTERRUPTED OR ERROR-FREE, OR THAT ANY DEFECTS WILL BE CORRECTED. NIST DOES NOT WARRANT OR MAKE ANY REPRESENTATIONS REGARDING THE USE OF THE SOFTWARE OR THE RESULTS THEREOF, INCLUDING BUT NOT LIMITED TO THE CORRECTNESS, ACCURACY, RELIABILITY, OR USEFULNESS OF THE SOFTWARE.
+
+# You are solely responsible for determining the appropriateness of using and distributing the software and you assume all risks associated with its use, including but not limited to the risks and costs of program errors, compliance with applicable laws, damage to or loss of data, programs or equipment, and the unavailability or interruption of operation. This software is not intended to be used in any situation where a failure could cause risk of injury or damage to property. The software developed by NIST employees is not subject to copyright protection within the United States.
+
 import sys
 
 if sys.version_info[0] < 3:
@@ -5,8 +11,6 @@ if sys.version_info[0] < 3:
 
 import torch
 import torch.nn
-
-from collections import defaultdict
 
 from yolo_layer import YOLOLayer
 
@@ -62,7 +66,7 @@ class res_block(torch.nn.Module):
 
 
 
-def build_net_dict(config_model, ignore_thres, number_channels):
+def build_net_dict(config_model, ignore_thres, number_channels, image_size):
     # ---- DarkNet53 ----
     mdict = torch.nn.ModuleDict()
 
@@ -113,7 +117,10 @@ def build_net_dict(config_model, ignore_thres, number_channels):
     mdict['y14_yolo_layer0'] = YOLOLayer(config_model, layer_nb=0, in_ch=int(fm_1x_fc), ignore_thres=ignore_thres)
 
     mdict['y15_conv'] = conv_layer(fc_in=int(fm_2x_fc), fc_out=int(fm_2x_fc / 2), kernel=1, stride=1)
-    mdict['y16_upsample'] = torch.nn.Upsample(scale_factor=2, mode='nearest')
+    # mdict['y16_upsample'] = torch.nn.Upsample(scale_factor=2, mode='nearest')
+    tgt_h = int(image_size[0] / 16)
+    tgt_w = int(image_size[0] / 16)
+    mdict['y16_upsample'] = torch.nn.Upsample(size=(tgt_h, tgt_w), mode='nearest')
 
     # input is concat of y12_conv and dn8_route1_rb4
     fc = int(fm_1x_fc / 2) + int(fm_2x_fc / 2)
@@ -126,7 +133,10 @@ def build_net_dict(config_model, ignore_thres, number_channels):
     mdict['y22_yolo_layer1'] = YOLOLayer(config_model, layer_nb=1, in_ch=int(fm_2x_fc), ignore_thres=ignore_thres)
 
     mdict['y23_conv'] = conv_layer(fc_in=int(fm_4x_fc), fc_out=int(fm_4x_fc / 2), kernel=1, stride=1)
-    mdict['y24_upsample'] = torch.nn.Upsample(scale_factor=2, mode='nearest')
+    # mdict['y24_upsample'] = torch.nn.Upsample(scale_factor=2, mode='nearest')
+    tgt_h = int(image_size[0] / 8)
+    tgt_w = int(image_size[0] / 8)
+    mdict['y24_upsample'] = torch.nn.Upsample(size=(tgt_h, tgt_w), mode='nearest')
 
     # input is concat of y20_conv and dn6_route0_rb3
     fc = int(fm_2x_fc / 2) + int(fm_4x_fc / 2)
@@ -145,13 +155,7 @@ class YoloV3(torch.nn.Module):
     FILTER_COUNT = 1024
     KERNEL_SIZE = 3
     NETWORK_DOWNSAMPLE_FACTOR = 32
-    WEIGHT_DECAY = 5e-4
     LEAKY_VALUE = 0.1
-
-
-    # ANCHORS = [(64, 64), (96, 96), (128, 128)]
-    ANCHORS = [(75, 75)]
-    NUMBER_ANCHORS = len(ANCHORS)
 
     # # [batch_size, 5376, 5 + NUMBER_CLASSES]
     # # last column contents: [x_ul, y_ul, x_lr, y_lr, objectness_logit, class_probability]
@@ -164,7 +168,7 @@ class YoloV3(torch.nn.Module):
         self.ignore_thres = ignore_thres
         self.number_classes = config_model['number_classes']
         self.number_channels = self.image_size[2]  # image size is [h, w, c]
-        self.mdict = build_net_dict(config_model, self.ignore_thres, self.number_channels)
+        self.mdict = build_net_dict(config_model, self.ignore_thres, self.number_channels, self.image_size)
 
     def forward(self, x, targets=None):
         """
@@ -244,7 +248,7 @@ class YoloV3(torch.nn.Module):
             output = torch.sum(output, dim=0, keepdim=True)
             return output
         else:
-            output = torch.cat(output, dim=1)
+            # output = torch.cat(output, dim=1)
             return output
 
 

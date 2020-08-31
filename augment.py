@@ -33,10 +33,12 @@ def augment_image_box_pair(img, boxes, rotation_flag=False, reflection_flag=Fals
                            scale_augmentation_severity=0,  # scale augmentation as a percentage of the image size):
                            blur_augmentation_max_sigma=0,  # blur augmentation kernel maximum size):
                            box_size_augmentation_severity=0, # how much to augment the box sizes by
-                           box_location_jitter_severity=0): # how much to jitter the box locations
+                           box_location_jitter_severity=0, # how much to jitter the box locations
+                           intensity_augmentation_severity=0):
 
-    assert rotation_flag == False, "Rotation not implemented for image and boxes pair"
-    img = np.asarray(img)
+    if rotation_flag:
+        raise NotImplementedError("Rotation not implemented for image and boxes pair")
+    img_type = img.dtype
 
     # ensure input images are np arrays
     img = np.asarray(img, dtype=np.float32)
@@ -57,12 +59,20 @@ def augment_image_box_pair(img, boxes, rotation_flag=False, reflection_flag=Fals
         box_size_augmentation_severity = 0
     if box_location_jitter_severity is None:
         box_location_jitter_severity = 0
+    if intensity_augmentation_severity is None:
+        intensity_augmentation_severity = 0
 
     # confirm that severity is a float between [0,1]
-    assert 0 <= noise_augmentation_severity < 1
-    assert 0 <= scale_augmentation_severity < 1
-    assert 0 <= box_size_augmentation_severity < 1
-    assert 0 <= box_location_jitter_severity < 1
+    if not (0 <= noise_augmentation_severity < 1):
+        raise RuntimeError('Invalid noise_augmentation_severity')
+    if not (0 <= scale_augmentation_severity < 1):
+        raise RuntimeError('Invalid scale_augmentation_severity')
+    if not (0 <= box_size_augmentation_severity < 1):
+        raise RuntimeError('Invalid box_size_augmentation_severity')
+    if not (0 <= box_location_jitter_severity < 1):
+        raise RuntimeError('Invalid box_location_jitter_severity')
+    if not (0 <= intensity_augmentation_severity < 1):
+        raise RuntimeError('Invalid intensity_augmentation_severity')
 
     # set default augmentation parameter values (which correspond to no transformation)
     reflect_x = False
@@ -121,7 +131,28 @@ def augment_image_box_pair(img, boxes, rotation_flag=False, reflection_flag=Fals
         if sigma > 0:
             img = scipy.ndimage.filters.gaussian_filter(img, sigma, mode='reflect')
 
-    img = np.asarray(img, dtype=np.float32)
+    if intensity_augmentation_severity > 0:
+        img_range = np.max(img) - np.min(img)
+        if debug_worst_possible_transformation:
+            value = 1 * intensity_augmentation_severity * img_range
+        else:
+            value = np.random.rand() * intensity_augmentation_severity * img_range
+        if np.random.rand() > 0.5:
+            sign = 1.0
+        else:
+            sign = -1.0
+        delta = sign * value
+        img = img + delta # additive intensity adjustment
+
+    if img_type is np.float32 or img_type is np.float64:
+        min_value = np.finfo(img_type).min
+        max_value = np.finfo(img_type).max
+    else:
+        min_value = np.iinfo(img_type).min
+        max_value = np.iinfo(img_type).max
+    img = np.clip(img, min_value, max_value)
+    img = img.astype(img_type)
+
     return img, boxes
 
 
